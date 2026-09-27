@@ -28,7 +28,10 @@ cd D:\ATM
 .\mvnw.cmd spring-boot:run
 ```
 
-The server starts on **http://localhost:8080**, creates the schema and seeds three demo accounts:
+The server starts on **http://localhost:8080** and now serves a **web UI** — open
+`http://localhost:8080` in your browser for a working ATM screen (login, balance,
+deposit, withdraw, transfer, statement). It also creates the schema and seeds three
+demo accounts:
 
 | Account | PIN  | Owner        | Balance |
 |---------|------|--------------|---------|

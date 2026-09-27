@@ -9,9 +9,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.validation.FieldError;
 
 /**
@@ -66,6 +68,26 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(HttpMessageNotReadableException.class)
 	public ResponseEntity<ApiError> handleUnreadable(HttpMessageNotReadableException ex) {
 		return build(400, "Bad Request", "Malformed or unreadable request body");
+	}
+
+	/**
+	 * A path with no endpoint — e.g. a browser opening {@code http://localhost:8080/}.
+	 * Without this handler the generic {@link Exception} fallback below would turn it
+	 * into a misleading 500 instead of an honest 404.
+	 */
+	@ExceptionHandler(NoResourceFoundException.class)
+	public ResponseEntity<ApiError> handleNoResource(NoResourceFoundException ex) {
+		return build(404, "Not Found", "No page or endpoint at this path — see README.md for API paths");
+	}
+
+	/**
+	 * Wrong HTTP method — e.g. opening a POST-only endpoint in the browser, which sends GET.
+	 * Returns 405 instead of falling through to the generic 500.
+	 */
+	@ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+	public ResponseEntity<ApiError> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
+		return build(405, "Method Not Allowed",
+				ex.getMethod() + " is not supported here — check README.md for the correct method");
 	}
 
 	/** Safety net: anything unexpected becomes a generic 500 without leaking stack traces. */

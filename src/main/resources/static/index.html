@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATM — Spring Boot Demo</title>
+<!--
+  Single-file ATM frontend.
+  Spring Boot automatically serves anything in src/main/resources/static,
+  so opening http://localhost:8080/ loads this page.
+
+  All data comes from the REST API via fetch():
+    POST /api/auth/login              -> token
+    GET  /api/accounts/{id}/balance   -> balance
+    POST /api/accounts/{id}/deposit   -> receipt
+    POST /api/accounts/{id}/withdraw  -> receipt
+    POST /api/transfers               -> 2 receipts
+    GET  /api/accounts/{id}/transactions -> statement
+-->
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --line: #334155;
+    --accent: #22c55e; --accent-dark: #16a34a;
+    --text: #e2e8f0; --muted: #94a3b8; --danger: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    color: var(--text); padding: 16px;
+  }
+  .atm {
+    width: 100%; max-width: 440px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 20px;
+    padding: 28px; box-shadow: 0 25px 60px rgba(0,0,0,.5);
+  }
+  header { text-align: center; margin-bottom: 22px; }
+  header .logo { font-size: 40px; }
+  header h1 { font-size: 22px; margin-top: 6px; }
+  header p { color: var(--muted); font-size: 13px; }
+
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  input {
+    width: 100%; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: #0f172a;
+    color: var(--text); font-size: 16px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  .btn {
+    width: 100%; padding: 13px; margin-top: 16px; border: none;
+    border-radius: 10px; background: var(--accent); color: #052e16;
+    font-size: 16px; font-weight: 600; cursor: pointer;
+    transition: background .15s, transform .05s;
+  }
+  .btn:hover { background: var(--accent-dark); color: #fff; }
+  .btn:active { transform: scale(.98); }
+  .btn.secondary { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  .btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  .balance-card {
+    background: linear-gradient(135deg, #14532d, #166534);
+    border-radius: 14px; padding: 20px; text-align: center; margin-bottom: 18px;
+  }
+  .balance-card .label { color: #bbf7d0; font-size: 13px; }
+  .balance-card .amount { font-size: 34px; font-weight: 700; font-family: Consolas, monospace; }
+  .balance-card .who { color: #bbf7d0; font-size: 13px; margin-top: 6px; }
+
+  .menu { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .menu button {
+    padding: 16px 10px; border-radius: 12px; border: 1px solid var(--line);
+    background: #0f172a; color: var(--text); font-size: 15px; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .menu button:hover { border-color: var(--accent); background: #14532d33; }
+  .menu button .icon { display: block; font-size: 24px; margin-bottom: 6px; }
+
+  .msg { margin-top: 14px; padding: 11px 14px; border-radius: 10px; font-size: 14px; display: none; }
+  .msg.show { display: block; }
+  .msg.ok   { background: #14532d; border: 1px solid var(--accent); color: #bbf7d0; }
+  .msg.err  { background: #450a0a; border: 1px solid var(--danger); color: #fecaca; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th, td { padding: 9px 6px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-family: Consolas, monospace; }
+  .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+  .badge.in  { background: #14532d; color: #86efac; }
+  .badge.out { background: #450a0a; color: #fca5a5; }
+
+  .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 16px; line-height: 1.7; }
+  .hint code { background: #0f172a; padding: 1px 6px; border-radius: 6px; color: var(--accent); }
+  .topline { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .topline span { font-size: 13px; color: var(--muted); }
+  .link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="atm">
+  <header>
+    <div class="logo">🏧</div>
+    <h1>ATM Banking</h1>
+    <p>Spring Boot 4 &middot; MySQL &middot; REST API demo</p>
+  </header>
+
+  <div id="message" class="msg"></div>
+
+  <!-- ============ LOGIN ============ -->
+  <section id="screen-login" class="screen active">
+    <form id="loginForm">
+      <label for="accountNumber">Account number</label>
+      <input id="accountNumber" autocomplete="username" placeholder="e.g. 1001" required>
+      <label for="pin">PIN</label>
+      <input id="pin" type="password" inputmode="numeric" autocomplete="current-password"
+             placeholder="e.g. 1234" required>
+      <button class="btn" type="submit">Sign in</button>
+    </form>
+    <p class="hint">
+      Demo accounts<br>
+      <code>1001 / 1234</code> &nbsp; <code>1002 / 5678</code> &nbsp; <code>1003 / 4321</code>
+    </p>
+  </section>
+
+  <!-- ============ HOME ============ -->
+  <section id="screen-home" class="screen">
+    <div class="balance-card">
+      <div class="label">Available balance</div>
+      <div class="amount" id="balanceAmount">—</div>
+      <div class="who" id="whoLine"></div>
+    </div>
+    <div class="menu">
+      <button onclick="openAction('deposit')"><span class="icon">💰</span>Deposit</button>
+      <button onclick="openAction('withdraw')"><span class="icon">💵</span>Withdraw</button>
+      <button onclick="openAction('transfer')"><span class="icon">🔁</span>Transfer</button>
+      <button onclick="openStatement()"><span class="icon">📜</span>Statement</button>
+    </div>
+    <button class="btn secondary" onclick="logout()">Sign out</button>
+  </section>
+
+  <!-- ============ DEPOSIT ============ -->
+  <section id="screen-deposit" class="screen">
+    <div class="topline"><b>Deposit cash</b><button class="link" onclick="goHome()">← Back</button></div>
+    <form id="depositForm">
+      <label for="depAmount">Amount (₹)</label>
+      <input id="depAmount" inputmode="decimal" placeholder="0.00" required>
+      <button class="btn" type="submit">Deposit</button>
+    </form>
+  </section>
+
+  <!-- ============ WITHDRAW ============ -->
+  <section id="screen-withdraw" class="screen">
+    <div class="topline"><b>Withdraw cash</b><button class="link" onclick="goHome()">← Back</button></div>
+    <form id="withdrawForm">
+      <label for="wdAmount">Amount (₹)</label>
+      <input id="wdAmount" inputmode="decimal" placeholder="0.00" required>
+      <label for="wdPin">Confirm PIN</label>
+      <input id="wdPin" type="password" inputmode="numeric" placeholder="••••" required>
+      <button class="btn" type="submit">Withdraw</button>
+    </form>
+  </section>
+
+  <!-- ============ TRANSFER ============ -->
+  <section id="screen-transfer" class="screen">
+    <div class="topline"><b>Transfer money</b><button class="link" onclick="goHome()">← Back</button></div>
+    <form id="transferForm">
+      <label for="trTo">To account number</label>
+      <input id="trTo" placeholder="e.g. 1002" required>
+      <label for="trAmount">Amount (₹)</label>
+      <input id="trAmount" inputmode="decimal" placeholder="0.00" required>
+      <label for="trPin">Confirm PIN</label>
+      <input id="trPin" type="password" inputmode="numeric" placeholder="••••" required>
+      <button class="btn" type="submit">Transfer</button>
+    </form>
+  </section>
+
+  <!-- ============ STATEMENT ============ -->
+  <section id="screen-statement" class="screen">
+    <div class="topline"><b>Transaction statement</b><button class="link" onclick="goHome()">← Back</button></div>
+    <table>
+      <thead><tr><th>Type</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr></thead>
+      <tbody id="txBody"><tr><td colspan="3">Loading…</td></tr></tbody>
+    </table>
+  </section>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Session state (kept in sessionStorage so a page refresh keeps you signed in)
+--------------------------------------------------------------------------- */
+let session = JSON.parse(sessionStorage.getItem('atmSession') || 'null');
+
+const $ = (id) => document.getElementById(id);
+
+function show(screen) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  $('screen-' + screen).classList.add('active');
+}
+
+function msg(text, ok) {
+  const el = $('message');
+  if (!text) { el.classList.remove('show'); return; }
+  el.textContent = text;
+  el.className = 'msg show ' + (ok ? 'ok' : 'err');
+}
+
+function money(v) { return '₹ ' + Number(v).toFixed(2); }
+
+/* ---------------------------------------------------------------------------
+   API helper: one place that adds the auth token and turns error JSON
+   (from GlobalExceptionHandler) into a readable message.
+--------------------------------------------------------------------------- */
+async function api(path, method = 'GET', body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (session) headers['Authorization'] = 'Bearer ' + session.token;
+
+  const res = await fetch(path, {
+    method, headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+
+  if (!res.ok) {
+    if (res.status === 401 && session) { signOutUI('Session expired — please sign in again.'); }
+    let m = data ? data.message : ('HTTP ' + res.status);
+    if (data && data.fields && Object.keys(data.fields).length) {
+      m += ' — ' + Object.entries(data.fields).map(([k, v]) => k + ': ' + v).join(', ');
+    }
+    const err = new Error(m); err.status = res.status; throw err;
+  }
+  return data;
+}
+
+/* --------------------------- LOGIN / LOGOUT ------------------------------ */
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); msg('');
+  try {
+    session = await api('/api/auth/login', 'POST', {
+      accountNumber: $('accountNumber').value.trim(),
+      pin: $('pin').value.trim()
+    });
+    sessionStorage.setItem('atmSession', JSON.stringify(session));
+    goHome();
+    msg('Welcome, ' + session.ownerName + '!', true);
+  } catch (err) { msg(err.message, false); }
+});
+
+function signOutUI(text) {
+  session = null;
+  sessionStorage.removeItem('atmSession');
+  show('login');
+  if (text) msg(text, false);
+}
+
+async function logout() {
+  try { await api('/api/auth/logout', 'POST'); } catch (e) { /* token may already be gone */ }
+  signOutUI('Signed out. Thanks for banking with us!');
+}
+
+/* ------------------------------- HOME ------------------------------------ */
+async function goHome() {
+  show('home');
+  $('whoLine').textContent = session.accountNumber + ' · ' + session.ownerName;
+  $('balanceAmount').textContent = '…';
+  try {
+    const b = await api('/api/accounts/' + session.accountId + '/balance');
+    $('balanceAmount').textContent = money(b.balance);
+    session.balance = b.balance;
+    sessionStorage.setItem('atmSession', JSON.stringify(session));
+  } catch (err) { $('balanceAmount').textContent = '—'; msg(err.message, false); }
+}
+
+function openAction(kind) { msg(''); show(kind); }
+
+/* ---------------------------- OPERATIONS --------------------------------- */
+$('depositForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); msg('');
+  const amount = $('depAmount').value.trim();
+  if (!validAmount(amount)) return msg('Enter an amount like 100 or 50.25', false);
+  try {
+    const r = await api('/api/accounts/' + session.accountId + '/deposit', 'POST', { amount });
+    msg('Deposited ' + money(r.amount) + ' — new balance ' + money(r.balanceAfter), true);
+    $('depAmount').value = '';
+    goHome();
+  } catch (err) { msg(err.message, false); }
+});
+
+$('withdrawForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); msg('');
+  const amount = $('wdAmount').value.trim();
+  if (!validAmount(amount)) return msg('Enter an amount like 100 or 50.25', false);
+  try {
+    const r = await api('/api/accounts/' + session.accountId + '/withdraw', 'POST',
+      { amount, pin: $('wdPin').value.trim() });
+    msg('Here is your cash: ' + money(r.amount) + ' — new balance ' + money(r.balanceAfter), true);
+    $('wdAmount').value = ''; $('wdPin').value = '';
+    goHome();
+  } catch (err) { msg(err.message, false); }
+});
+
+$('transferForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); msg('');
+  const amount = $('trAmount').value.trim();
+  if (!validAmount(amount)) return msg('Enter an amount like 100 or 50.25', false);
+  try {
+    const rows = await api('/api/transfers', 'POST', {
+      toAccountNumber: $('trTo').value.trim(),
+      amount,
+      pin: $('trPin').value.trim()
+    });
+    const out = rows.find(r => r.type === 'TRANSFER_OUT');
+    msg('Sent ' + money(out.amount) + ' to account ' + out.counterpartyAccountNumber
+        + ' — new balance ' + money(out.balanceAfter), true);
+    $('trTo').value = ''; $('trAmount').value = ''; $('trPin').value = '';
+    goHome();
+  } catch (err) { msg(err.message, false); }
+});
+
+function validAmount(s) { return /^\d+(\.\d{1,2})?$/.test(s) && Number(s) > 0; }
+
+/* ----------------------------- STATEMENT --------------------------------- */
+async function openStatement() {
+  msg(''); show('statement');
+  const body = $('txBody');
+  body.innerHTML = '<tr><td colspan="3">Loading…</td></tr>';
+  try {
+    const rows = await api('/api/accounts/' + session.accountId + '/transactions');
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="3">No transactions yet.</td></tr>'; return; }
+    body.innerHTML = rows.map(t => {
+      const incoming = t.type === 'DEPOSIT' || t.type === 'TRANSFER_IN';
+      const label = t.type.replace('_', ' ');
+      const when = new Date(t.createdAt).toLocaleString();
+      return '<tr>'
+        + '<td><span class="badge ' + (incoming ? 'in' : 'out') + '">' + label + '</span>'
+        + '<div style="color:var(--muted);font-size:11px;margin-top:4px">' + when + '</div></td>'
+        + '<td class="num">' + (incoming ? '+' : '−') + Number(t.amount).toFixed(2) + '</td>'
+        + '<td class="num">' + Number(t.balanceAfter).toFixed(2) + '</td>'
+        + '</tr>';
+    }).join('');
+  } catch (err) { body.innerHTML = '<tr><td colspan="3">Failed to load.</td></tr>'; msg(err.message, false); }
+}
+
+/* ------------------------------ STARTUP ---------------------------------- */
+if (session) { goHome(); }          // still signed in after a refresh
+</script>
+</body>
+</html>
