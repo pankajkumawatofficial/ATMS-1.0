@@ -10,208 +10,1194 @@
   so opening http://localhost:8080/ loads this page.
 
   All data comes from the REST API via fetch():
-    POST /api/auth/login              -> token
-    GET  /api/accounts/{id}/balance   -> balance
-    POST /api/accounts/{id}/deposit   -> receipt
-    POST /api/accounts/{id}/withdraw  -> receipt
-    POST /api/transfers               -> 2 receipts
-    GET  /api/accounts/{id}/transactions -> statement
+    POST /api/auth/login                     -> token
+    GET  /api/auth/sessions                  -> signed-in devices
+    GET  /api/accounts/{id}/balance          -> balance + today's limit usage
+    GET  /api/accounts/{id}/recent           -> last 5 movements
+    POST /api/accounts/{id}/deposit          -> receipt
+    POST /api/accounts/{id}/withdraw         -> receipt
+    POST /api/transfers                      -> 2 receipts
+    GET  /api/accounts/lookup                -> confirm a payee before sending
+    GET  /api/accounts/{id}/statement        -> filtered + paged statement
+    GET  /api/accounts/{id}/beneficiaries    -> saved payees
+    POST /api/accounts/{id}/beneficiaries    -> save a payee
+    POST /api/accounts/{id}/change-pin       -> rotate the PIN
 -->
 <style>
+  /* ==========================================================================
+     1. Theme
+     ========================================================================== */
   :root {
-    --bg: #0f172a; --card: #1e293b; --line: #334155;
-    --accent: #22c55e; --accent-dark: #16a34a;
-    --text: #e2e8f0; --muted: #94a3b8; --danger: #f87171;
+    --bg: #0b1220;
+    --card: #141d2e;
+    --card-2: #0f172a;
+    --line: #26344b;
+    --accent: #22c55e;
+    --accent-dark: #16a34a;
+    --accent-2: #38bdf8;
+    --gold: #fbbf24;
+    --text: #e6edf7;
+    --muted: #93a4bd;
+    --danger: #f87171;
+    --shadow: 0 30px 70px rgba(0, 0, 0, .55);
+    --r-lg: 22px;
+    --r-md: 14px;
+    --r-sm: 10px;
   }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
   body {
-    font-family: "Segoe UI", system-ui, sans-serif;
-    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
-    min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    color: var(--text); padding: 16px;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background:
+      radial-gradient(1200px 700px at 15% -10%, #17304f 0%, transparent 60%),
+      radial-gradient(900px 600px at 110% 110%, #123c2c 0%, transparent 55%),
+      linear-gradient(160deg, #070b14 0%, #0b1220 45%, #0a1626 100%);
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text);
+    padding: 22px 14px;
+    overflow-x: hidden;
   }
-  .atm {
-    width: 100%; max-width: 440px; background: var(--card);
-    border: 1px solid var(--line); border-radius: 20px;
-    padding: 28px; box-shadow: 0 25px 60px rgba(0,0,0,.5);
+
+  /* ==========================================================================
+     2. Animated background orbs
+     ========================================================================== */
+  .bg { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+  .orb {
+    position: absolute; border-radius: 50%; filter: blur(70px); opacity: .35;
+    mix-blend-mode: screen;
   }
-  header { text-align: center; margin-bottom: 22px; }
-  header .logo { font-size: 40px; }
-  header h1 { font-size: 22px; margin-top: 6px; }
-  header p { color: var(--muted); font-size: 13px; }
+  .orb-a { width: 380px; height: 380px; left: -80px; top: -60px;
+           background: radial-gradient(circle at 30% 30%, #22c55e, transparent 70%);
+           animation: floatA 22s ease-in-out infinite; }
+  .orb-b { width: 460px; height: 460px; right: -120px; bottom: -120px;
+           background: radial-gradient(circle at 60% 40%, #38bdf8, transparent 70%);
+           animation: floatB 26s ease-in-out infinite; }
+  .orb-c { width: 260px; height: 260px; left: 55%; top: 8%;
+           background: radial-gradient(circle at 50% 50%, #fbbf24, transparent 70%);
+           opacity: .18; animation: floatA 30s ease-in-out infinite reverse; }
 
-  .screen { display: none; }
-  .screen.active { display: block; }
-
-  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
-  input {
-    width: 100%; padding: 12px 14px; border-radius: 10px;
-    border: 1px solid var(--line); background: #0f172a;
-    color: var(--text); font-size: 16px; outline: none;
+  @keyframes floatA {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50%      { transform: translate(70px, 60px) scale(1.15); }
   }
-  input:focus { border-color: var(--accent); }
-  .btn {
-    width: 100%; padding: 13px; margin-top: 16px; border: none;
-    border-radius: 10px; background: var(--accent); color: #052e16;
-    font-size: 16px; font-weight: 600; cursor: pointer;
-    transition: background .15s, transform .05s;
+  @keyframes floatB {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50%      { transform: translate(-80px, -50px) scale(1.1); }
   }
-  .btn:hover { background: var(--accent-dark); color: #fff; }
-  .btn:active { transform: scale(.98); }
-  .btn.secondary { background: transparent; border: 1px solid var(--line); color: var(--muted); }
-  .btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
 
-  .balance-card {
-    background: linear-gradient(135deg, #14532d, #166534);
-    border-radius: 14px; padding: 20px; text-align: center; margin-bottom: 18px;
+  /* ==========================================================================
+     3. ATM chassis: header bar, screen (viewport), cash slot, keypad
+     ========================================================================== */
+  .machine {
+    position: relative; z-index: 1;
+    width: 100%; max-width: 470px;
+    background: linear-gradient(180deg, #1a2438 0%, #131c2d 100%);
+    border: 1px solid #2b3a55;
+    border-radius: 28px;
+    padding: 16px 16px 20px;
+    box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .06);
+    animation: machineIn .7s cubic-bezier(.2, .9, .25, 1) both;
   }
-  .balance-card .label { color: #bbf7d0; font-size: 13px; }
-  .balance-card .amount { font-size: 34px; font-weight: 700; font-family: Consolas, monospace; }
-  .balance-card .who { color: #bbf7d0; font-size: 13px; margin-top: 6px; }
-
-  .menu { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .menu button {
-    padding: 16px 10px; border-radius: 12px; border: 1px solid var(--line);
-    background: #0f172a; color: var(--text); font-size: 15px; cursor: pointer;
-    transition: border-color .15s, background .15s;
+  @keyframes machineIn {
+    from { opacity: 0; transform: translateY(26px) scale(.97); }
+    to   { opacity: 1; transform: none; }
   }
-  .menu button:hover { border-color: var(--accent); background: #14532d33; }
-  .menu button .icon { display: block; font-size: 24px; margin-bottom: 6px; }
 
-  .msg { margin-top: 14px; padding: 11px 14px; border-radius: 10px; font-size: 14px; display: none; }
-  .msg.show { display: block; }
-  .msg.ok   { background: #14532d; border: 1px solid var(--accent); color: #bbf7d0; }
-  .msg.err  { background: #450a0a; border: 1px solid var(--danger); color: #fecaca; }
+  .machine-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 6px 14px;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-size: 15px; letter-spacing: .4px; }
+  .brand .logo { font-size: 22px; animation: logoBob 4s ease-in-out infinite; display: inline-block; }
+  .brand b { color: var(--accent); font-weight: 700; }
+  @keyframes logoBob { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-4px) rotate(2deg); } }
 
-  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
-  th, td { padding: 9px 6px; text-align: left; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 600; }
-  td.num { text-align: right; font-family: Consolas, monospace; }
-  .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
-  .badge.in  { background: #14532d; color: #86efac; }
-  .badge.out { background: #450a0a; color: #fca5a5; }
+  .head-right { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .clock { font-family: Consolas, "Courier New", monospace; letter-spacing: .5px; }
+  .sess-chip {
+    display: none; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 999px;
+    background: #0f172a; border: 1px solid var(--line);
+    font-family: Consolas, monospace;
+  }
+  .sess-chip.on { display: inline-flex; animation: rise .4s both; }
+  .sess-chip.warn { border-color: var(--danger); color: var(--danger); animation: pulseWarn 1s infinite; }
+  @keyframes pulseWarn { 0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,.45); } 50% { box-shadow: 0 0 0 6px rgba(248,113,113,0); } }
 
-  .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 16px; line-height: 1.7; }
-  .hint code { background: #0f172a; padding: 1px 6px; border-radius: 6px; color: var(--accent); }
+  .led {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 10px var(--accent);
+    animation: led 2.4s ease-in-out infinite;
+  }
+  @keyframes led { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* The screen: fixed-height, screens are layered and animated in/out. */
+  .viewport {
+    position: relative;
+    height: clamp(430px, 62vh, 660px);
+    background: linear-gradient(180deg, #0d1524 0%, #0b1220 100%);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    box-shadow: inset 0 0 40px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .viewport::after { /* faint scanline sheen of a real screen */
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+    background: repeating-linear-gradient(180deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px);
+    opacity: .5;
+  }
+
+  .screen {
+    position: absolute; inset: 0;
+    display: none;
+    padding: 18px 16px 22px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #2c3d59 transparent;
+  }
+  .screen::-webkit-scrollbar { width: 7px; }
+  .screen::-webkit-scrollbar-thumb { background: #2c3d59; border-radius: 99px; }
+  .screen.active  { display: block; animation: screenIn .42s cubic-bezier(.2,.85,.25,1) both; }
+  .screen.leaving { display: block; z-index: 2; animation: screenOut .26s ease both; pointer-events: none; }
+
+  @keyframes screenIn {
+    from { opacity: 0; transform: translateX(38px) scale(.985); filter: blur(4px); }
+    to   { opacity: 1; transform: none; filter: none; }
+  }
+  @keyframes screenOut {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: translateX(-30px) scale(.985); filter: blur(3px); }
+  }
+
+  /* Cash dispenser slot: glows and pushes cash out after a withdrawal. */
+  .slot {
+    position: relative; margin: 14px 4px 4px; height: 16px;
+    border-radius: 999px;
+    background: #060a12; border: 1px solid #22304a;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .slot i {
+    position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(34,197,94,.75), transparent);
+    opacity: 0; transition: opacity .3s;
+  }
+  .slot em { font-size: 9px; letter-spacing: 2px; color: #46587a; font-style: normal; text-transform: uppercase; }
+  .slot.dispense i { opacity: 1; animation: slotGlow 1.1s ease-in-out 3; }
+  .slot.dispense::after {
+    content: "₹ CASH"; position: absolute; font-size: 10px; font-weight: 700; color: #052e16;
+    background: #86efac; padding: 2px 12px; border-radius: 3px;
+    animation: eject 1.5s cubic-bezier(.2,.9,.3,1) both;
+  }
+  @keyframes slotGlow { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
+  @keyframes eject {
+    0%   { transform: translateY(0); opacity: 0; }
+    35%  { transform: translateY(4px); opacity: 1; }
+    100% { transform: translateY(-46px); opacity: 0; }
+  }
+
+  /* Physical keypad. */
+  .keypad { margin-top: 14px; transition: opacity .3s, transform .3s; }
+  .machine.no-pad .keypad { display: none; }
+  .keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .key {
+    position: relative; overflow: hidden;
+    padding: 13px 0; font-size: 17px; font-weight: 600;
+    color: var(--text); cursor: pointer;
+    background: linear-gradient(180deg, #22304a 0%, #1a2539 100%);
+    border: 1px solid #31415f; border-radius: 12px;
+    box-shadow: 0 3px 0 #101828, inset 0 1px 0 rgba(255,255,255,.07);
+    transition: transform .06s, box-shadow .06s, border-color .2s;
+  }
+  .key:hover { border-color: var(--accent); color: var(--accent); }
+  .key:active { transform: translateY(3px); box-shadow: 0 0 0 #101828, inset 0 1px 0 rgba(255,255,255,.05); }
+  .key.ok {
+    grid-column: 1 / -1; background: linear-gradient(180deg, #16a34a, #14532d);
+    border-color: #166534; color: #ecfdf5; letter-spacing: 3px; font-size: 14px;
+  }
+  .key.ok:hover { color: #fff; filter: brightness(1.1); }
+  .key.armed { animation: keyArm .5s ease; }
+  @keyframes keyArm { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.6); } 100% { box-shadow: 0 0 0 14px rgba(34,197,94,0); } }
+
+  /* ==========================================================================
+     4. Shared controls
+     ========================================================================== */
+  header.page-head { text-align: center; margin-bottom: 6px; }
+  header.page-head h1 { font-size: 21px; }
+  header.page-head p { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+
   .topline { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-  .topline span { font-size: 13px; color: var(--muted); }
-  .link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; }
+  .topline b { font-size: 15px; letter-spacing: .3px; }
+  .topline b::before { content: "◆ "; color: var(--accent); font-size: 11px; }
+
+  .link {
+    background: none; border: none; color: var(--accent-2);
+    cursor: pointer; font-size: 13px; padding: 4px 6px; border-radius: 8px;
+    transition: background .2s, color .2s;
+  }
+  .link:hover { background: rgba(56,189,248,.12); }
+
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 13px 0 6px; }
+
+  input, select {
+    width: 100%; padding: 12px 14px; border-radius: var(--r-sm);
+    border: 1px solid var(--line); background: #0a111e;
+    color: var(--text); font-size: 16px; outline: none;
+    transition: border-color .2s, box-shadow .2s, background .2s;
+  }
+  select { cursor: pointer; }
+  input:focus, select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, .16);
+    background: #0c1526;
+  }
+  input.numeric { font-family: Consolas, "Courier New", monospace; letter-spacing: 2px; }
+  input.pad-focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(56,189,248,.18); }
+  input.flash { animation: fieldFlash .6s ease; }
+  @keyframes fieldFlash {
+    0%   { box-shadow: 0 0 0 0 rgba(34,197,94,.55); border-color: var(--accent); }
+    100% { box-shadow: 0 0 0 12px rgba(34,197,94,0); }
+  }
+
+  .btn {
+    position: relative; overflow: hidden;
+    width: 100%; padding: 13px; margin-top: 16px; border: none;
+    border-radius: var(--r-sm);
+    background: linear-gradient(180deg, #22c55e, #16a34a);
+    color: #052e16; font-size: 16px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 8px 20px rgba(22, 163, 74, .32);
+    transition: transform .12s, box-shadow .2s, filter .2s;
+  }
+  .btn:hover { filter: brightness(1.07); box-shadow: 0 12px 26px rgba(22,163,74,.42); transform: translateY(-1px); }
+  .btn:active { transform: scale(.985); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+  .btn.secondary {
+    background: transparent; border: 1px solid var(--line); color: var(--muted);
+    box-shadow: none;
+  }
+  .btn.secondary:hover { border-color: var(--accent); color: var(--accent); box-shadow: none; }
+  .btn.danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); box-shadow: none; }
+  .btn.danger:hover { background: rgba(248,113,113,.12); box-shadow: none; }
+
+  .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 14px; line-height: 1.75; }
+  .hint code { background: #0a111e; padding: 1px 7px; border-radius: 6px; color: var(--gold); border: 1px solid var(--line); }
+
+  /* Ripple spawned on every pressable element. */
+  .ripple {
+    position: absolute; border-radius: 50%; transform: scale(0);
+    background: rgba(255,255,255,.4); pointer-events: none;
+    animation: ripple .55s ease-out forwards;
+  }
+  @keyframes ripple { to { transform: scale(2.6); opacity: 0; } }
+
+  .shake { animation: shake .42s cubic-bezier(.36,.07,.19,.97) both; }
+  @keyframes shake {
+    10%, 90% { transform: translateX(-2px); }
+    20%, 80% { transform: translateX(4px); }
+    30%, 50% { transform: translateX(-7px); }
+    40%, 60% { transform: translateX(7px); }
+  }
+
+  /* Generic staggered entrance for list rows / tiles. */
+  .stagger > * { animation: rise .5s cubic-bezier(.2,.85,.25,1) both; animation-delay: var(--d, 0ms); }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* ==========================================================================
+     5. Login + open account
+     ========================================================================== */
+  .bank-card {
+    position: relative; margin: 4px auto 18px; height: 116px; max-width: 300px;
+    border-radius: 14px; padding: 14px 16px;
+    background: linear-gradient(135deg, #14532d 0%, #0f172a 45%, #166534 100%);
+    border: 1px solid #23475f;
+    box-shadow: 0 16px 34px rgba(0,0,0,.45);
+    overflow: hidden;
+    transform-style: preserve-3d;
+    animation: cardFloat 6s ease-in-out infinite;
+    transition: transform .6s cubic-bezier(.5,0,.2,1), opacity .5s;
+  }
+  .bank-card::before { /* moving holographic sheen */
+    content: ""; position: absolute; top: -60%; left: -30%; width: 60%; height: 220%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,.22), transparent);
+    transform: rotate(18deg);
+    animation: sheen 5s ease-in-out infinite;
+  }
+  @keyframes sheen { 0%, 60% { left: -40%; } 100% { left: 130%; } }
+  @keyframes cardFloat { 0%,100% { transform: translateY(0) rotate(-.6deg); } 50% { transform: translateY(-6px) rotate(.6deg); } }
+  .bank-card .chip { width: 34px; height: 26px; border-radius: 5px; background: linear-gradient(135deg, #fde68a, #d97706); box-shadow: inset 0 0 6px rgba(0,0,0,.35); }
+  .bank-card .no { font-family: Consolas, monospace; font-size: 17px; letter-spacing: 3px; margin-top: 20px; color: #dcfce7; }
+  .bank-card .row { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 8px; font-size: 10.5px; color: #86efac; letter-spacing: 1.4px; text-transform: uppercase; }
+  .bank-card.inserting { transform: translateY(140px) scale(.82); opacity: 0; }
+
+  .demo-chips { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+  .demo-chips button {
+    padding: 7px 12px; font-size: 12px; cursor: pointer;
+    border: 1px dashed #33465f; border-radius: 999px;
+    background: #0a111e; color: var(--muted);
+    transition: all .2s;
+    font-family: Consolas, monospace;
+  }
+  .demo-chips button:hover { border-color: var(--gold); color: var(--gold); transform: translateY(-2px); }
+
+  /* ==========================================================================
+     6. Home: balance card, limit meter, menu, recent activity
+     ========================================================================== */
+  .balance-card {
+    position: relative; overflow: hidden;
+    border-radius: var(--r-md); padding: 20px 18px 18px;
+    background: linear-gradient(135deg, #14532d 0%, #0b3b2a 55%, #166534 100%);
+    border: 1px solid #1f6b45;
+    box-shadow: 0 18px 36px rgba(6, 78, 59, .35);
+    animation: rise .55s both;
+  }
+  .balance-card::after {
+    content: ""; position: absolute; top: -70%; left: -20%; width: 55%; height: 240%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,.14), transparent);
+    transform: rotate(20deg);
+    animation: sheen 6.5s ease-in-out infinite;
+  }
+  .balance-card .label { color: #bbf7d0; font-size: 12.5px; letter-spacing: 1.6px; text-transform: uppercase; }
+  .balance-card .amount {
+    font-size: 38px; font-weight: 700; font-family: Consolas, "Courier New", monospace;
+    margin-top: 6px; letter-spacing: 1px; text-shadow: 0 2px 14px rgba(0,0,0,.45);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .balance-card .amount.hidden-amt { filter: blur(9px); user-select: none; }
+  .eye {
+    background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.18);
+    color: #dcfce7; border-radius: 8px; font-size: 14px; padding: 4px 8px; cursor: pointer;
+    transition: transform .2s, background .2s;
+  }
+  .eye:hover { transform: scale(1.12); background: rgba(0,0,0,.4); }
+  .balance-card .who { color: #bbf7d0; font-size: 12.5px; margin-top: 8px; opacity: .9; }
+
+  .limit {
+    margin: 12px 0 4px; padding: 12px 14px;
+    border: 1px solid var(--line); border-radius: var(--r-md);
+    background: #0d1524; animation: rise .55s .08s both;
+  }
+  .limit .row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .limit .bar { height: 7px; background: #0a111e; border-radius: 999px; margin-top: 9px; overflow: hidden; }
+  .limit .bar i {
+    display: block; height: 100%; width: 0; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), #4ade80);
+    transition: width 1.1s cubic-bezier(.2,.9,.3,1);
+    box-shadow: 0 0 12px rgba(34,197,94,.6);
+  }
+  .limit .bar i.high { background: linear-gradient(90deg, #f87171, #fbbf24); box-shadow: 0 0 12px rgba(248,113,113,.55); }
+  .limit .none { font-size: 12px; color: var(--muted); }
+
+  .menu { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .menu button {
+    position: relative; overflow: hidden;
+    padding: 15px 10px; border-radius: var(--r-md);
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, #101a2b, #0c1421);
+    color: var(--text); font-size: 14.5px; cursor: pointer;
+    transition: transform .18s cubic-bezier(.2,.9,.3,1.4), border-color .2s, box-shadow .25s;
+    animation: rise .5s both; animation-delay: var(--d, 0ms);
+  }
+  .menu button:hover {
+    border-color: var(--accent);
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(0,0,0,.4), 0 0 0 1px rgba(34,197,94,.25);
+  }
+  .menu button:active { transform: translateY(-1px) scale(.98); }
+  .menu button .icon { display: block; font-size: 23px; margin-bottom: 7px; }
+
+  .section-title {
+    display: flex; justify-content: space-between; align-items: center;
+    margin: 20px 0 8px; font-size: 12px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--muted);
+  }
+
+  /* Recent activity rows + generic payee rows. */
+  .row-item {
+    display: flex; align-items: center; gap: 11px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-md);
+    background: #0d1524; margin-bottom: 8px;
+    transition: transform .18s, border-color .2s, background .2s;
+  }
+  .row-item:hover { transform: translateX(4px); border-color: #34496b; background: #101a2c; }
+  .row-item .ic {
+    width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center; font-size: 16px;
+    background: #0a111e; border: 1px solid var(--line);
+  }
+  .row-item .info { flex: 1; min-width: 0; }
+  .row-item .nm { font-size: 13.5px; font-weight: 600; }
+  .row-item .sub { font-size: 11.5px; color: var(--muted); font-family: Consolas, monospace; margin-top: 2px; }
+  .row-item .amt { font-family: Consolas, monospace; font-size: 14px; font-weight: 700; white-space: nowrap; }
+  .amt.in { color: #4ade80; }
+  .amt.out { color: var(--danger); }
+  .amt.in   { animation: glowIn .8s ease both; }
+  @keyframes glowIn { from { text-shadow: 0 0 14px rgba(74,222,128,.9); } to { text-shadow: none; } }
+
+  .avatar {
+    width: 36px; height: 36px; border-radius: 50%; flex: 0 0 auto;
+    background: linear-gradient(135deg, #14532d, #166534);
+    color: #bbf7d0; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px;
+    border: 1px solid #1f6b45;
+  }
+
+  .icon-btn {
+    border: 1px solid var(--line); background: #0a111e; color: var(--muted);
+    border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+    transition: all .18s;
+  }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+  .icon-btn.danger:hover { border-color: var(--danger); color: var(--danger); background: rgba(248,113,113,.1); }
+  .row-item.removing { animation: collapse .32s ease forwards; }
+  @keyframes collapse { to { opacity: 0; transform: translateX(-40px) scale(.95); margin-bottom: -8px; height: 0; padding-top: 0; padding-bottom: 0; border-width: 0; } }
+
+  /* ==========================================================================
+     7. Quick amounts, confirm strip, statement
+     ========================================================================== */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chips button {
+    padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line);
+    background: #0a111e; color: var(--text); font-size: 13px; cursor: pointer;
+    transition: all .18s cubic-bezier(.2,.9,.3,1.3);
+    font-family: Consolas, monospace;
+  }
+  .chips button:hover { border-color: var(--gold); color: var(--gold); transform: translateY(-2px) scale(1.04); }
+  .chips button:active { transform: scale(.94); }
+
+  .confirm {
+    display: none; align-items: center; gap: 9px; margin-top: 11px;
+    padding: 10px 12px; border-radius: var(--r-sm); font-size: 13px;
+    background: rgba(20, 83, 45, .55); border: 1px solid var(--accent); color: #bbf7d0;
+  }
+  .confirm.show { display: flex; animation: confirmIn .38s cubic-bezier(.2,.9,.3,1.2) both; }
+  .confirm.bad { background: rgba(69, 10, 10, .6); border-color: var(--danger); color: #fecaca; }
+  @keyframes confirmIn { from { opacity: 0; transform: translateY(-8px) scale(.97); } to { opacity: 1; transform: none; } }
+  .confirm .tick { font-size: 16px; }
+
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; }
+  .filters label { margin-top: 9px; }
+
+  .type-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .type-chips button {
+    padding: 6px 11px; font-size: 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: #0a111e; color: var(--muted);
+    transition: all .18s;
+  }
+  .type-chips button.on { border-color: var(--accent); color: #052e16; background: var(--accent); font-weight: 600; }
+  .type-chips button:hover { color: var(--text); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  th, td { padding: 9px 6px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; }
+  td.num { text-align: right; font-family: Consolas, monospace; }
+  tbody tr { cursor: pointer; animation: rise .42s both; animation-delay: var(--d, 0ms); transition: background .18s, transform .18s; }
+  tbody tr:hover { background: rgba(56,189,248,.07); transform: scale(1.012); }
+
+  .badge { padding: 3px 9px; border-radius: 999px; font-size: 10.5px; white-space: nowrap; letter-spacing: .4px; }
+  .badge.in  { background: rgba(20,83,45,.9); color: #86efac; border: 1px solid #166534; }
+  .badge.out { background: rgba(69,10,10,.9); color: #fca5a5; border: 1px solid #7f1d1d; }
+
+  .pager { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; }
+  .pager .info { font-size: 12px; color: var(--muted); font-family: Consolas, monospace; }
+  .pager button {
+    border: 1px solid var(--line); background: #0a111e; color: var(--text);
+    border-radius: 9px; padding: 8px 13px; font-size: 13px; cursor: pointer;
+    transition: all .18s;
+  }
+  .pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+  .pager button:disabled { opacity: .35; cursor: not-allowed; }
+
+  .skel { height: 13px; border-radius: 6px; margin: 9px 0;
+          background: linear-gradient(90deg, #131d2f 25%, #1f2d45 50%, #131d2f 75%);
+          background-size: 200% 100%; animation: shimmer 1.25s linear infinite; }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+  .empty { text-align: center; padding: 34px 10px; color: var(--muted); font-size: 13.5px; }
+  .empty .big { font-size: 34px; display: block; margin-bottom: 10px; animation: logoBob 3s ease-in-out infinite; }
+
+  /* ==========================================================================
+     8. Toasts, overlay (busy / success receipt), receipt modal
+     ========================================================================== */
+  .toasts {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 60; display: flex; flex-direction: column; gap: 9px; width: min(92vw, 430px);
+  }
+  .toast {
+    position: relative; overflow: hidden;
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 12px 14px; border-radius: 12px; font-size: 13.5px;
+    background: rgba(15, 23, 42, .96); border: 1px solid var(--line);
+    box-shadow: 0 16px 34px rgba(0,0,0,.5);
+    backdrop-filter: blur(8px);
+    animation: toastIn .4s cubic-bezier(.2,.9,.3,1.2) both;
+  }
+  .toast.out { animation: toastOut .3s ease forwards; }
+  .toast.ok   { border-color: var(--accent); }
+  .toast.err  { border-color: var(--danger); }
+  .toast.warn { border-color: var(--gold); }
+  .toast .ti { font-size: 16px; line-height: 1.2; }
+  .toast .bar { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; transform-origin: left;
+                background: var(--accent); animation: shrink linear forwards; }
+  .toast.err  .bar { background: var(--danger); }
+  .toast.warn .bar { background: var(--gold); }
+  @keyframes toastIn   { from { opacity: 0; transform: translateY(-22px) scale(.96); } to { opacity: 1; transform: none; } }
+  @keyframes toastOut  { to { opacity: 0; transform: translateY(-16px) scale(.97); } }
+  @keyframes shrink    { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+  .overlay {
+    position: fixed; inset: 0; z-index: 70;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+    background: rgba(4, 8, 16, .72); backdrop-filter: blur(7px);
+    animation: fadeIn .25s ease both;
+  }
+  .overlay[hidden] { display: none; }
+  .overlay.out { animation: fadeOut .25s ease both; }
+  @keyframes fadeIn  { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes fadeOut { to { opacity: 0; } }
+
+  .ov-card {
+    width: min(94vw, 380px); text-align: center;
+    background: linear-gradient(180deg, #16203380, #101a2b), var(--card);
+    border: 1px solid #2b3a55; border-radius: 20px;
+    padding: 26px 22px 22px;
+    box-shadow: var(--shadow);
+    animation: ovIn .42s cubic-bezier(.2,.9,.3,1.25) both;
+  }
+  @keyframes ovIn { from { opacity: 0; transform: translateY(26px) scale(.92); } to { opacity: 1; transform: none; } }
+
+  .spinner {
+    width: 52px; height: 52px; margin: 4px auto 16px;
+    border-radius: 50%;
+    border: 4px solid rgba(56,189,248,.18);
+    border-top-color: var(--accent-2);
+    border-right-color: var(--accent);
+    animation: spin .85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .check { width: 62px; height: 62px; margin: 0 auto 12px; display: none; }
+  .check circle { fill: none; stroke: var(--accent); stroke-width: 3; stroke-dasharray: 166; stroke-dashoffset: 166;
+                  animation: draw .6s ease forwards; }
+  .check path   { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round;
+                  stroke-dasharray: 60; stroke-dashoffset: 60; animation: draw .45s .4s ease forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  .ov-card h3 { font-size: 18px; margin-bottom: 4px; }
+  .ov-card .status { color: var(--muted); font-size: 13px; min-height: 18px; }
+
+  /* Paper receipt: rows slide out of the printer one by one. */
+  .receipt {
+    margin: 16px auto 4px; padding: 14px 15px; text-align: left;
+    background: repeating-linear-gradient(180deg, #f8fafc 0 12px, #f1f5f9 12px 24px);
+    color: #0f172a; border-radius: 6px;
+    font-family: Consolas, monospace; font-size: 12.5px;
+    box-shadow: 0 12px 26px rgba(0,0,0,.4);
+    transform-origin: top center;
+    animation: printOut .6s .25s cubic-bezier(.2,.9,.3,1) both;
+    position: relative;
+  }
+  .receipt::before {
+    content: ""; position: absolute; left: 0; right: 0; top: -7px; height: 8px;
+    background: repeating-linear-gradient(90deg, #f8fafc 0 7px, transparent 7px 14px);
+  }
+  @keyframes printOut { from { transform: scaleY(.1) translateY(-14px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .receipt .rhead { text-align: center; font-weight: 700; letter-spacing: 1px; border-bottom: 1px dashed #94a3b8; padding-bottom: 7px; margin-bottom: 8px; }
+  .rline { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; opacity: 0;
+           animation: rise .3s ease forwards; animation-delay: var(--d, 0ms); }
+  .rline span { color: #475569; }
+  .rline b { font-weight: 700; text-align: right; }
+  .rline.total { border-top: 1px dashed #94a3b8; margin-top: 6px; padding-top: 7px; font-size: 13.5px; }
+
+  #fx { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
+
+  /* ==========================================================================
+     9. Small helpers + responsive
+     ========================================================================== */
+  .muted { color: var(--muted); }
+  .row-flex { display: flex; gap: 8px; align-items: center; }
+  .grow { flex: 1; }
+
+  @media (max-width: 430px) {
+    .menu { gap: 8px; }
+    .menu button { font-size: 13.5px; padding: 13px 8px; }
+    .filters { grid-template-columns: 1fr; }
+    .balance-card .amount { font-size: 32px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+                              transition-duration: .01ms !important; }
+  }
 </style>
 </head>
 <body>
-<div class="atm">
-  <header>
-    <div class="logo">🏧</div>
-    <h1>ATM Banking</h1>
-    <p>Spring Boot 4 &middot; MySQL &middot; REST API demo</p>
-  </header>
+<div class="bg" aria-hidden="true"><span class="orb orb-a"></span><span class="orb orb-b"></span><span class="orb orb-c"></span></div>
 
-  <div id="message" class="msg"></div>
-
-  <!-- ============ LOGIN ============ -->
-  <section id="screen-login" class="screen active">
-    <form id="loginForm">
-      <label for="accountNumber">Account number</label>
-      <input id="accountNumber" autocomplete="username" placeholder="e.g. 1001" required>
-      <label for="pin">PIN</label>
-      <input id="pin" type="password" inputmode="numeric" autocomplete="current-password"
-             placeholder="e.g. 1234" required>
-      <button class="btn" type="submit">Sign in</button>
-    </form>
-    <p class="hint">
-      Demo accounts<br>
-      <code>1001 / 1234</code> &nbsp; <code>1002 / 5678</code> &nbsp; <code>1003 / 4321</code>
-    </p>
-  </section>
-
-  <!-- ============ HOME ============ -->
-  <section id="screen-home" class="screen">
-    <div class="balance-card">
-      <div class="label">Available balance</div>
-      <div class="amount" id="balanceAmount">—</div>
-      <div class="who" id="whoLine"></div>
+<main class="machine" id="machine">
+  <div class="machine-head">
+    <div class="brand"><span class="logo">🏧</span><span>ATM <b>Banking</b></span></div>
+    <div class="head-right">
+      <span class="sess-chip" id="sessChip">⏱ <span id="sessClock">30:00</span></span>
+      <span class="clock" id="clock">--:--:--</span>
+      <span class="led"></span>
     </div>
-    <div class="menu">
-      <button onclick="openAction('deposit')"><span class="icon">💰</span>Deposit</button>
-      <button onclick="openAction('withdraw')"><span class="icon">💵</span>Withdraw</button>
-      <button onclick="openAction('transfer')"><span class="icon">🔁</span>Transfer</button>
-      <button onclick="openStatement()"><span class="icon">📜</span>Statement</button>
+  </div>
+
+  <div class="viewport" id="viewport">
+
+    <!-- ============ LOGIN ============ -->
+    <section id="screen-login" class="screen active">
+      <div class="bank-card" id="bankCard">
+        <div class="chip"></div>
+        <div class="no">•••• •••• •••• 1001</div>
+        <div class="row"><span>ATM Banking Demo</span><span id="cardHolder">CARD HOLDER</span></div>
+      </div>
+
+      <form id="loginForm" data-enter>
+        <label for="accountNumber">Account number</label>
+        <input id="accountNumber" class="numeric" autocomplete="username" inputmode="none"
+               maxlength="20" placeholder="e.g. 1001" required>
+        <label for="pin">PIN</label>
+        <input id="pin" class="numeric" type="password" inputmode="none" maxlength="6"
+               autocomplete="current-password" placeholder="••••" required>
+        <button class="btn" type="submit">Sign in</button>
+      </form>
+
+      <div class="demo-chips" id="demoChips">
+        <button type="button" data-acc="1001" data-pin="1234">1001 / 1234</button>
+        <button type="button" data-acc="1002" data-pin="5678">1002 / 5678</button>
+        <button type="button" data-acc="1003" data-pin="4321">1003 / 4321</button>
+      </div>
+
+      <p class="hint">Tap a demo card above, or use the keypad below.<br>New here?</p>
+      <button class="link" style="display:block;margin:2px auto 0" onclick="show('openaccount')">+ Open a new account</button>
+    </section>
+
+    <!-- ============ OPEN ACCOUNT ============ -->
+    <section id="screen-openaccount" class="screen">
+      <div class="topline"><b>Open an account</b><button class="link" onclick="show('login')">← Back</button></div>
+      <form id="openAccountForm" data-enter>
+        <label for="newNumber">Account number</label>
+        <input id="newNumber" class="numeric" inputmode="none" maxlength="20" placeholder="4-20 digits" required>
+        <label for="newOwner">Full name</label>
+        <input id="newOwner" placeholder="e.g. Priya Nair" required>
+        <label for="newPin">Choose a PIN</label>
+        <input id="newPin" class="numeric" type="password" inputmode="none" maxlength="6" placeholder="4-6 digits" required>
+        <label for="newBalance">Opening balance (optional)</label>
+        <input id="newBalance" class="numeric" inputmode="none" maxlength="12" placeholder="0.00">
+        <button class="btn" type="submit">Create account</button>
+      </form>
+    </section>
+
+    <!-- ============ HOME ============ -->
+    <section id="screen-home" class="screen">
+      <div class="balance-card">
+        <div class="label">Available balance</div>
+        <div class="amount"><span id="balanceAmount">—</span>
+          <button class="eye" id="eyeBtn" title="Hide / show" type="button">👁</button>
+        </div>
+        <div class="who" id="whoLine"></div>
+      </div>
+
+      <div id="limitBox" class="limit"></div>
+
+      <div class="menu" id="homeMenu">
+        <button style="--d:0ms"   onclick="openAction('deposit')"><span class="icon">💰</span>Deposit</button>
+        <button style="--d:60ms"  onclick="openAction('withdraw')"><span class="icon">💵</span>Withdraw</button>
+        <button style="--d:120ms" onclick="openAction('transfer')"><span class="icon">🔁</span>Transfer</button>
+        <button style="--d:180ms" onclick="openStatement()"><span class="icon">📜</span>Statement</button>
+        <button style="--d:240ms" onclick="openPayees()"><span class="icon">👥</span>Payees</button>
+        <button style="--d:300ms" onclick="openSettings()"><span class="icon">⚙️</span>Settings</button>
+      </div>
+
+      <div class="section-title"><span>Recent activity</span>
+        <button class="link" style="font-size:11.5px" onclick="openStatement()">View all →</button>
+      </div>
+      <div id="recentList" class="stagger"></div>
+
+      <button class="btn secondary" onclick="logout()">Sign out</button>
+    </section>
+
+    <!-- ============ DEPOSIT ============ -->
+    <section id="screen-deposit" class="screen">
+      <div class="topline"><b>Deposit cash</b><button class="link" onclick="goHome()">← Back</button></div>
+      <form id="depositForm" data-enter>
+        <label for="depAmount">Amount (₹)</label>
+        <input id="depAmount" class="numeric" inputmode="none" maxlength="12" placeholder="0.00" required>
+        <div class="chips">
+          <button type="button" data-fill="depAmount" data-amt="500">₹500</button>
+          <button type="button" data-fill="depAmount" data-amt="1000">₹1,000</button>
+          <button type="button" data-fill="depAmount" data-amt="2500">₹2,500</button>
+          <button type="button" data-fill="depAmount" data-amt="5000">₹5,000</button>
+        </div>
+        <button class="btn" type="submit">Deposit</button>
+      </form>
+      <p class="hint">Notes and coins are credited instantly to your balance.</p>
+    </section>
+
+    <!-- ============ WITHDRAW ============ -->
+    <section id="screen-withdraw" class="screen">
+      <div class="topline"><b>Withdraw cash</b><button class="link" onclick="goHome()">← Back</button></div>
+      <form id="withdrawForm" data-enter>
+        <label for="wdAmount">Amount (₹)</label>
+        <input id="wdAmount" class="numeric" inputmode="none" maxlength="12" placeholder="0.00" required>
+        <div class="chips">
+          <button type="button" data-fill="wdAmount" data-amt="200">₹200</button>
+          <button type="button" data-fill="wdAmount" data-amt="500">₹500</button>
+          <button type="button" data-fill="wdAmount" data-amt="1000">₹1,000</button>
+          <button type="button" data-fill="wdAmount" data-amt="2000">₹2,000</button>
+        </div>
+        <p class="hint" id="wdHint" style="text-align:left;margin-top:12px"></p>
+        <label for="wdPin">Confirm PIN</label>
+        <input id="wdPin" class="numeric" type="password" inputmode="none" maxlength="6" placeholder="••••" required>
+        <button class="btn" type="submit">Withdraw</button>
+      </form>
+    </section>
+
+    <!-- ============ TRANSFER ============ -->
+    <section id="screen-transfer" class="screen">
+      <div class="topline"><b>Transfer money</b><button class="link" onclick="goHome()">← Back</button></div>
+      <form id="transferForm" data-enter>
+        <label for="trTo">To account number</label>
+        <input id="trTo" class="numeric" inputmode="none" maxlength="20" placeholder="e.g. 1002" required>
+        <div class="confirm" id="trConfirm"></div>
+        <div class="chips" id="trChips"></div>
+        <label for="trAmount">Amount (₹)</label>
+        <input id="trAmount" class="numeric" inputmode="none" maxlength="12" placeholder="0.00" required>
+        <div class="chips">
+          <button type="button" data-fill="trAmount" data-amt="500">₹500</button>
+          <button type="button" data-fill="trAmount" data-amt="1000">₹1,000</button>
+          <button type="button" data-fill="trAmount" data-amt="5000">₹5,000</button>
+        </div>
+        <label for="trPin">Confirm PIN</label>
+        <input id="trPin" class="numeric" type="password" inputmode="none" maxlength="6" placeholder="••••" required>
+        <button class="btn" type="submit">Transfer</button>
+      </form>
+    </section>
+
+    <!-- ============ STATEMENT ============ -->
+    <section id="screen-statement" class="screen">
+      <div class="topline"><b>Transaction statement</b>
+        <span class="row-flex">
+          <button class="link" id="exportBtn" title="Download CSV">⤓ CSV</button>
+          <button class="link" onclick="goHome()">← Back</button>
+        </span>
+      </div>
+
+      <div class="type-chips" id="typeChips">
+        <button class="on" data-type="">All</button>
+        <button data-type="DEPOSIT">Deposits</button>
+        <button data-type="WITHDRAWAL">Withdrawals</button>
+        <button data-type="TRANSFER_IN">In</button>
+        <button data-type="TRANSFER_OUT">Out</button>
+      </div>
+
+      <div class="filters">
+        <div><label for="fSearch">Counterparty</label><input id="fSearch" placeholder="e.g. 1002"></div>
+        <div><label for="fType">Type (select)</label>
+          <select id="fType">
+            <option value="">All types</option>
+            <option value="DEPOSIT">Deposits</option>
+            <option value="WITHDRAWAL">Withdrawals</option>
+            <option value="TRANSFER_IN">Transfers in</option>
+            <option value="TRANSFER_OUT">Transfers out</option>
+          </select>
+        </div>
+        <div><label for="fFrom">From</label><input id="fFrom" type="date"></div>
+        <div><label for="fTo">To</label><input id="fTo" type="date"></div>
+        <div><label for="fMin">Min amount</label><input id="fMin" class="numeric" inputmode="none" placeholder="0.00"></div>
+        <div><label for="fMax">Max amount</label><input id="fMax" class="numeric" inputmode="none" placeholder="any"></div>
+      </div>
+
+      <div class="pager">
+        <button class="link" onclick="resetFilters()">Clear filters</button>
+        <span class="info" id="pageInfo"></span>
+      </div>
+
+      <table>
+        <thead><tr><th>Type</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr></thead>
+        <tbody id="txBody"></tbody>
+      </table>
+
+      <div class="pager">
+        <button id="prevPage" onclick="turn(-1)">← Newer</button>
+        <span class="info" id="rangeInfo"></span>
+        <button id="nextPage" onclick="turn(1)">Older →</button>
+      </div>
+      <p class="hint">Tap any row to see the full receipt.</p>
+    </section>
+
+    <!-- ============ PAYEES ============ -->
+    <section id="screen-payees" class="screen">
+      <div class="topline"><b>Saved payees</b><button class="link" onclick="goHome()">← Back</button></div>
+      <p class="hint" style="text-align:left;margin:0 0 6px">Save an account once, then transfer to it in two taps.</p>
+      <form id="payeeForm" data-enter>
+        <label for="payeeNumber">Account number</label>
+        <input id="payeeNumber" class="numeric" inputmode="none" maxlength="20" placeholder="e.g. 1002" required>
+        <div class="confirm" id="payeeConfirm"></div>
+        <label for="payeeNick">Nickname</label>
+        <input id="payeeNick" maxlength="40" placeholder="e.g. Landlord" required>
+        <button class="btn" type="submit">Save payee</button>
+      </form>
+      <div class="section-title"><span>Your list</span></div>
+      <div id="payeeList" class="stagger"></div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section id="screen-settings" class="screen">
+      <div class="topline"><b>Settings</b><button class="link" onclick="goHome()">← Back</button></div>
+
+      <form id="pinForm" data-enter>
+        <label for="curPin">Current PIN</label>
+        <input id="curPin" class="numeric" type="password" inputmode="none" maxlength="6" placeholder="••••" required>
+        <label for="newPinIn">New PIN (4-6 digits)</label>
+        <input id="newPinIn" class="numeric" type="password" inputmode="none" maxlength="6" placeholder="••••" required>
+        <label for="newPin2">Repeat new PIN</label>
+        <input id="newPin2" class="numeric" type="password" inputmode="none" maxlength="6" placeholder="••••" required>
+        <button class="btn" type="submit">Change PIN</button>
+        <p class="hint" style="text-align:left;margin-top:10px">Changing your PIN signs you out everywhere else.</p>
+      </form>
+
+      <div class="section-title"><span>Signed-in devices</span></div>
+      <div id="sessionList" class="stagger"></div>
+    </section>
+  </div>
+
+  <div class="slot" id="cashSlot"><i></i><em>cash dispenser</em></div>
+
+  <div class="keypad" id="keypad">
+    <div class="keys">
+      <button class="key" data-k="1" type="button">1</button>
+      <button class="key" data-k="2" type="button">2</button>
+      <button class="key" data-k="3" type="button">3</button>
+      <button class="key" data-k="4" type="button">4</button>
+      <button class="key" data-k="5" type="button">5</button>
+      <button class="key" data-k="6" type="button">6</button>
+      <button class="key" data-k="7" type="button">7</button>
+      <button class="key" data-k="8" type="button">8</button>
+      <button class="key" data-k="9" type="button">9</button>
+      <button class="key" data-k="." type="button">.</button>
+      <button class="key" data-k="0" type="button">0</button>
+      <button class="key" data-k="del" type="button">⌫</button>
+      <button class="key ok" data-k="ok" type="button">ENTER</button>
     </div>
-    <button class="btn secondary" onclick="logout()">Sign out</button>
-  </section>
+  </div>
+</main>
 
-  <!-- ============ DEPOSIT ============ -->
-  <section id="screen-deposit" class="screen">
-    <div class="topline"><b>Deposit cash</b><button class="link" onclick="goHome()">← Back</button></div>
-    <form id="depositForm">
-      <label for="depAmount">Amount (₹)</label>
-      <input id="depAmount" inputmode="decimal" placeholder="0.00" required>
-      <button class="btn" type="submit">Deposit</button>
-    </form>
-  </section>
+<div id="toasts" class="toasts"></div>
 
-  <!-- ============ WITHDRAW ============ -->
-  <section id="screen-withdraw" class="screen">
-    <div class="topline"><b>Withdraw cash</b><button class="link" onclick="goHome()">← Back</button></div>
-    <form id="withdrawForm">
-      <label for="wdAmount">Amount (₹)</label>
-      <input id="wdAmount" inputmode="decimal" placeholder="0.00" required>
-      <label for="wdPin">Confirm PIN</label>
-      <input id="wdPin" type="password" inputmode="numeric" placeholder="••••" required>
-      <button class="btn" type="submit">Withdraw</button>
-    </form>
-  </section>
-
-  <!-- ============ TRANSFER ============ -->
-  <section id="screen-transfer" class="screen">
-    <div class="topline"><b>Transfer money</b><button class="link" onclick="goHome()">← Back</button></div>
-    <form id="transferForm">
-      <label for="trTo">To account number</label>
-      <input id="trTo" placeholder="e.g. 1002" required>
-      <label for="trAmount">Amount (₹)</label>
-      <input id="trAmount" inputmode="decimal" placeholder="0.00" required>
-      <label for="trPin">Confirm PIN</label>
-      <input id="trPin" type="password" inputmode="numeric" placeholder="••••" required>
-      <button class="btn" type="submit">Transfer</button>
-    </form>
-  </section>
-
-  <!-- ============ STATEMENT ============ -->
-  <section id="screen-statement" class="screen">
-    <div class="topline"><b>Transaction statement</b><button class="link" onclick="goHome()">← Back</button></div>
-    <table>
-      <thead><tr><th>Type</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr></thead>
-      <tbody id="txBody"><tr><td colspan="3">Loading…</td></tr></tbody>
-    </table>
-  </section>
+<div id="overlay" class="overlay" hidden>
+  <div class="ov-card">
+    <div class="spinner" id="ovSpinner"></div>
+    <svg class="check" id="ovCheck" viewBox="0 0 52 52" aria-hidden="true">
+      <circle cx="26" cy="26" r="24"></circle>
+      <path d="M15 27 l8 8 l15 -17"></path>
+    </svg>
+    <h3 id="ovTitle">Working…</h3>
+    <p class="status" id="ovStatus"></p>
+    <div class="receipt" id="ovReceipt" style="display:none"></div>
+    <button class="btn" id="ovBtn" type="button" style="display:none">Continue</button>
+  </div>
 </div>
 
+<div id="receiptModal" class="overlay" hidden>
+  <div class="ov-card">
+    <div class="receipt" id="rcBody" style="margin-top:0"></div>
+    <div class="row-flex" style="margin-top:14px">
+      <button class="btn secondary" style="margin-top:0" id="rcClose" type="button">Close</button>
+      <button class="btn" style="margin-top:0" id="rcCopy" type="button">Copy ref</button>
+    </div>
+  </div>
+</div>
+
+<canvas id="fx"></canvas>
+
 <script>
-/* ---------------------------------------------------------------------------
+/* ===========================================================================
    Session state (kept in sessionStorage so a page refresh keeps you signed in)
---------------------------------------------------------------------------- */
+=========================================================================== */
 let session = JSON.parse(sessionStorage.getItem('atmSession') || 'null');
 
+/** Statement paging state — reset whenever the filters change. */
+let stmt = { page: 0, size: 5, last: true, rows: [] };
+let hideBalance = false;
+let balanceShown = 0;
+
 const $ = (id) => document.getElementById(id);
+const money = (v) => '₹ ' + Number(v).toFixed(2);
+const numeric = (v) => Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const validAmount = (s) => /^\d+(\.\d{1,2})?$/.test(s) && Number(s) > 0;
+
+/* Nicknames come from user input, so they must not be injected as raw HTML. */
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+function initials(name) {
+  return (name || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+}
+
+/* ===========================================================================
+   Toasts
+=========================================================================== */
+const TOAST_ICON = { ok: '✅', err: '⚠️', warn: '⏰' };
+function toast(text, kind = 'ok', ms = 3800) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.innerHTML = '<span class="ti">' + (TOAST_ICON[kind] || 'ℹ️') + '</span>'
+               + '<span class="grow">' + escapeHtml(text) + '</span>'
+               + '<span class="bar" style="animation-duration:' + ms + 'ms"></span>';
+  $('toasts').appendChild(el);
+  const kill = () => { el.classList.add('out'); setTimeout(() => el.remove(), 320); };
+  el.addEventListener('click', kill);
+  setTimeout(kill, ms);
+}
+
+/** Kept for compatibility with older call sites: route everything through toast(). */
+function msg(text, ok) { if (text) toast(text, ok ? 'ok' : 'err'); }
+
+/* ===========================================================================
+   Screen switching (animated in/out)
+=========================================================================== */
+const PAD_OFF = new Set(['home', 'statement']);   // screens without numeric entry
 
 function show(screen) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  $('screen-' + screen).classList.add('active');
+  const next = $('screen-' + screen);
+  if (!next) return;
+  const cur = document.querySelector('.screen.active');
+  if (cur === next) return;
+
+  if (cur) {
+    cur.classList.remove('active');
+    cur.classList.add('leaving');
+    setTimeout(() => cur.classList.remove('leaving'), 280);
+  }
+  next.classList.add('active');
+  next.scrollTop = 0;
+
+  $('machine').classList.toggle('no-pad', PAD_OFF.has(screen));
+
+  // Point the keypad at the first numeric field of the new screen (if any).
+  const firstNumeric = next.querySelector('input.numeric');
+  if (firstNumeric && !PAD_OFF.has(screen)) setTimeout(() => setPadTarget(firstNumeric), 120);
 }
 
-function msg(text, ok) {
-  const el = $('message');
-  if (!text) { el.classList.remove('show'); return; }
-  el.textContent = text;
-  el.className = 'msg show ' + (ok ? 'ok' : 'err');
+/* ===========================================================================
+   On-screen keypad: types into whichever numeric field was touched last
+=========================================================================== */
+let padTarget = null;
+function setPadTarget(el) {
+  padTarget = el;
+  document.querySelectorAll('input.numeric.pad-focus').forEach(i => i.classList.remove('pad-focus'));
+  if (el) el.classList.add('pad-focus');
+}
+document.addEventListener('focusin', (e) => {
+  if (e.target.classList && e.target.classList.contains('numeric')) setPadTarget(e.target);
+});
+
+$('keypad').addEventListener('click', (e) => {
+  const key = e.target.closest('.key');
+  if (!key) return;
+  bumpActivity();
+  key.classList.remove('armed'); void key.offsetWidth; key.classList.add('armed');
+
+  const k = key.dataset.k;
+  if (k === 'ok') {
+    const screen = document.querySelector('.screen.active');
+    const form = screen && screen.querySelector('form[data-enter]');
+    if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
+    return;
+  }
+  if (!padTarget || document.contains(padTarget) === false) { toast('Tap a field first', 'warn', 1800); return; }
+  if (k === 'del') {
+    padTarget.value = padTarget.value.slice(0, -1);
+  } else if (k === '.') {
+    if (!padTarget.value.includes('.')) padTarget.value = (padTarget.value || '0') + '.';
+  } else {
+    const max = Number(padTarget.maxLength > 0 ? padTarget.maxLength : 12);
+    if (padTarget.value.length >= max) return;
+    padTarget.value += k;
+  }
+  padTarget.dispatchEvent(new Event('input', { bubbles: true }));
+  padTarget.focus();
+});
+
+/** Ripple feedback on every pressable control. */
+document.addEventListener('click', (e) => {
+  const target = e.target.closest('.btn, .menu button, .key, .chips button, .type-chips button, .demo-chips button');
+  if (!target) return;
+  const r = document.createElement('span');
+  const rect = target.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height);
+  r.className = 'ripple';
+  r.style.width = r.style.height = size + 'px';
+  r.style.left = (e.clientX - rect.left - size / 2) + 'px';
+  r.style.top = (e.clientY - rect.top - size / 2) + 'px';
+  target.appendChild(r);
+  setTimeout(() => r.remove(), 600);
+});
+
+/** Quick-amount chips. */
+document.addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-fill]');
+  if (!chip) return;
+  fill(chip.dataset.fill, chip.dataset.amt);
+});
+function fill(id, amount) {
+  const el = $(id);
+  el.value = amount;
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-function money(v) { return '₹ ' + Number(v).toFixed(2); }
+/** Demo login chips. */
+$('demoChips').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  $('accountNumber').value = b.dataset.acc;
+  $('pin').value = b.dataset.pin;
+  ['accountNumber', 'pin'].forEach(id => {
+    const el = $(id);
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  });
+  setPadTarget($('pin'));
+});
 
-/* ---------------------------------------------------------------------------
+/* ===========================================================================
+   Overlay: busy spinner, then a printed receipt on success
+=========================================================================== */
+const STATUS_LINES = [
+  'Contacting host…', 'Verifying your PIN…', 'Authorising…',
+  'Updating your ledger…', 'Almost done…'
+];
+let statusTimer = null, statusIdx = 0;
+
+function busy(title) {
+  const ov = $('overlay');
+  ov.hidden = false; ov.classList.remove('out');
+  $('ovSpinner').style.display = '';
+  $('ovCheck').style.display = 'none';
+  $('ovReceipt').style.display = 'none';
+  $('ovBtn').style.display = 'none';
+  $('ovTitle').textContent = title || 'Working…';
+  statusIdx = 0;
+  $('ovStatus').textContent = STATUS_LINES[0];
+  clearInterval(statusTimer);
+  statusTimer = setInterval(() => {
+    statusIdx = (statusIdx + 1) % STATUS_LINES.length;
+    $('ovStatus').textContent = STATUS_LINES[statusIdx];
+  }, 750);
+}
+
+function closeOverlay() {
+  clearInterval(statusTimer);
+  const ov = $('overlay');
+  if (ov.hidden) return;
+  ov.classList.add('out');
+  setTimeout(() => { ov.hidden = true; ov.classList.remove('out'); }, 240);
+}
+
+function rline(label, value, i, cls = '') {
+  return '<div class="rline ' + cls + '" style="--d:' + (340 + i * 90) + 'ms">'
+       + '<span>' + escapeHtml(label) + '</span><b>' + escapeHtml(value) + '</b></div>';
+}
+
+/**
+ * Success card: animated tick + a receipt that slides out of the printer,
+ * optionally followed by confetti and a cash-dispensing animation.
+ */
+function success({ title, lines, cash = false, onContinue }) {
+  clearInterval(statusTimer);
+  $('ovSpinner').style.display = 'none';
+  const check = $('ovCheck');
+  check.style.display = 'block';
+  check.querySelectorAll('circle, path').forEach(p => { p.style.animation = 'none'; void p.getBBox(); p.style.animation = ''; });
+
+  $('ovTitle').textContent = title;
+  $('ovStatus').textContent = '';
+
+  const rec = $('ovReceipt');
+  rec.style.display = '';
+  rec.innerHTML = '<div class="rhead">ATM BANKING · RECEIPT</div>'
+                + lines.map((l, i) => rline(l[0], l[1], i, l[2] || '')).join('')
+                + '<div class="rline" style="--d:' + (340 + lines.length * 90) + 'ms"><span>Ref</span><b>'
+                + Math.random().toString(36).slice(2, 8).toUpperCase() + '</b></div>';
+
+  const btn = $('ovBtn');
+  btn.style.display = '';
+  btn.textContent = 'Continue';
+  btn.onclick = () => { closeOverlay(); if (onContinue) onContinue(); };
+
+  if (cash) { const s = $('cashSlot'); s.classList.remove('dispense'); void s.offsetWidth; s.classList.add('dispense');
+              setTimeout(() => s.classList.remove('dispense'), 4600); }
+  confetti();
+}
+
+function fail(err) {
+  closeOverlay();
+  toast(err.message || String(err), 'err');
+  const screen = document.querySelector('.screen.active');
+  if (screen) { screen.classList.remove('shake'); void screen.offsetWidth; screen.classList.add('shake'); }
+}
+
+/* ===========================================================================
+   Confetti
+=========================================================================== */
+const fx = $('fx');
+const fxc = fx.getContext('2d');
+let particles = [], fxRunning = false;
+
+function sizeCanvas() {
+  fx.width = window.innerWidth * devicePixelRatio;
+  fx.height = window.innerHeight * devicePixelRatio;
+  fxc.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+}
+window.addEventListener('resize', sizeCanvas);
+sizeCanvas();
+
+function confetti() {
+  const colors = ['#22c55e', '#38bdf8', '#fbbf24', '#f472b6', '#a78bfa', '#e6edf7'];
+  const cx = window.innerWidth / 2, cy = window.innerHeight * 0.4;
+  for (let i = 0; i < 130; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 3 + Math.random() * 8;
+    particles.push({
+      x: cx, y: cy,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 3,
+      w: 5 + Math.random() * 7, h: 4 + Math.random() * 6,
+      rot: Math.random() * Math.PI, vr: (Math.random() - .5) * .35,
+      c: colors[(Math.random() * colors.length) | 0], life: 1
+    });
+  }
+  if (!fxRunning) { fxRunning = true; requestAnimationFrame(stepFx); }
+}
+
+function stepFx() {
+  fxc.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  particles = particles.filter(p => p.life > 0);
+  particles.forEach(p => {
+    p.vy += .22; p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.life -= .011;
+    fxc.save();
+    fxc.globalAlpha = Math.max(p.life, 0);
+    fxc.translate(p.x, p.y); fxc.rotate(p.rot);
+    fxc.fillStyle = p.c;
+    fxc.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    fxc.restore();
+  });
+  if (particles.length) requestAnimationFrame(stepFx);
+  else { fxRunning = false; fxc.clearRect(0, 0, window.innerWidth, window.innerHeight); }
+}
+
+/* ===========================================================================
    API helper: one place that adds the auth token and turns error JSON
    (from GlobalExceptionHandler) into a readable message.
---------------------------------------------------------------------------- */
+=========================================================================== */
 async function api(path, method = 'GET', body) {
   const headers = { 'Content-Type': 'application/json' };
   if (session) headers['Authorization'] = 'Bearer ' + session.token;
@@ -225,7 +1211,7 @@ async function api(path, method = 'GET', body) {
   const data = text ? JSON.parse(text) : null;
 
   if (!res.ok) {
-    if (res.status === 401 && session) { signOutUI('Session expired — please sign in again.'); }
+    if (res.status === 401 && session) signOutUI('Session expired — please sign in again.');
     let m = data ? data.message : ('HTTP ' + res.status);
     if (data && data.fields && Object.keys(data.fields).length) {
       m += ' — ' + Object.entries(data.fields).map(([k, v]) => k + ': ' + v).join(', ');
@@ -235,25 +1221,34 @@ async function api(path, method = 'GET', body) {
   return data;
 }
 
-/* --------------------------- LOGIN / LOGOUT ------------------------------ */
+/* ===========================================================================
+   LOGIN / LOGOUT
+=========================================================================== */
 $('loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); msg('');
+  e.preventDefault();
+  const acct = $('accountNumber').value.trim(), pin = $('pin').value.trim();
+  if (!acct || !pin) { toast('Enter your account number and PIN', 'warn'); return shake($('screen-login')); }
+
+  busy('Verifying your card…');
   try {
-    session = await api('/api/auth/login', 'POST', {
-      accountNumber: $('accountNumber').value.trim(),
-      pin: $('pin').value.trim()
-    });
+    session = await api('/api/auth/login', 'POST', { accountNumber: acct, pin });
     sessionStorage.setItem('atmSession', JSON.stringify(session));
-    goHome();
-    msg('Welcome, ' + session.ownerName + '!', true);
-  } catch (err) { msg(err.message, false); }
+    closeOverlay();
+    $('bankCard').classList.add('inserting');           // card is swallowed by the machine
+    setTimeout(() => {
+      $('bankCard').classList.remove('inserting');
+      goHome();
+      toast('Welcome back, ' + session.ownerName + '!', 'ok');
+    }, 620);
+  } catch (err) { fail(err); $('pin').value = ''; }
 });
 
 function signOutUI(text) {
   session = null;
   sessionStorage.removeItem('atmSession');
+  $('sessChip').classList.remove('on');
   show('login');
-  if (text) msg(text, false);
+  if (text) toast(text, 'warn');
 }
 
 async function logout() {
@@ -261,51 +1256,173 @@ async function logout() {
   signOutUI('Signed out. Thanks for banking with us!');
 }
 
-/* ------------------------------- HOME ------------------------------------ */
+/* ===========================================================================
+   OPEN ACCOUNT
+=========================================================================== */
+$('openAccountForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const balance = $('newBalance').value.trim();
+  if (balance && !validAmount(balance)) return toast('Opening balance must look like 100 or 50.25', 'err');
+  busy('Opening your account…');
+  try {
+    const acc = await api('/api/accounts', 'POST', {
+      accountNumber: $('newNumber').value.trim(),
+      ownerName: $('newOwner').value.trim(),
+      pin: $('newPin').value.trim(),
+      initialBalance: balance ? Number(balance) : 0
+    });
+    closeOverlay();
+    $('newNumber').value = ''; $('newOwner').value = '';
+    $('newPin').value = ''; $('newBalance').value = '';
+    show('login');
+    $('accountNumber').value = acc.accountNumber;
+    toast('Account ' + acc.accountNumber + ' created — sign in with your new PIN.', 'ok', 5000);
+  } catch (err) { fail(err); }
+});
+
+/* ===========================================================================
+   HOME: balance (count-up), daily limit meter, recent activity
+=========================================================================== */
 async function goHome() {
   show('home');
   $('whoLine').textContent = session.accountNumber + ' · ' + session.ownerName;
-  $('balanceAmount').textContent = '…';
-  try {
-    const b = await api('/api/accounts/' + session.accountId + '/balance');
-    $('balanceAmount').textContent = money(b.balance);
-    session.balance = b.balance;
-    sessionStorage.setItem('atmSession', JSON.stringify(session));
-  } catch (err) { $('balanceAmount').textContent = '—'; msg(err.message, false); }
+  $('cardHolder').textContent = session.ownerName.toUpperCase();
+  renderRecent([]);
+
+  const [balance, recent] = await Promise.all([
+    api('/api/accounts/' + session.accountId + '/balance').catch(e => ({ __err: e })),
+    api('/api/accounts/' + session.accountId + '/recent?limit=5').catch(e => [])
+  ]);
+
+  if (balance.__err) {
+    $('balanceAmount').textContent = '—';
+    return toast(balance.__err.message, 'err');
+  }
+  countUp($('balanceAmount'), balanceShown, Number(balance.balance), 900);
+  balanceShown = Number(balance.balance);
+  applyBalanceVisibility();
+  renderLimit(balance);
+  session.balance = balance.balance;
+  session.remainingToday = balance.remainingToday;   // cached for the withdraw screen
+  sessionStorage.setItem('atmSession', JSON.stringify(session));
+  renderRecent(recent);
 }
 
-function openAction(kind) { msg(''); show(kind); }
+function applyBalanceVisibility() {
+  const el = $('balanceAmount');
+  el.classList.toggle('hidden-amt', hideBalance);
+  if (hideBalance) el.textContent = '₹ ••••••';
+  else el.textContent = money(balanceShown);
+  $('eyeBtn').textContent = hideBalance ? '🙈' : '👁';
+}
+$('eyeBtn').addEventListener('click', () => { hideBalance = !hideBalance; applyBalanceVisibility(); bumpActivity(); });
 
-/* ---------------------------- OPERATIONS --------------------------------- */
+/** Animated number: eases from the old balance to the new one. */
+function countUp(el, from, to, dur) {
+  const t0 = performance.now();
+  const step = (t) => {
+    const p = Math.min((t - t0) / dur, 1);
+    const eased = 1 - Math.pow(1 - p, 3);
+    el.textContent = money(from + (to - from) * eased);
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/** Daily-limit meter — the bar animates its width from 0 on every visit. */
+function renderLimit(b) {
+  const box = $('limitBox');
+  if (!b.dailyLimit) {
+    box.innerHTML = '<div class="none">No daily withdrawal limit on this account.</div>';
+    return;
+  }
+  const used = Number(b.withdrawnToday), limit = Number(b.dailyLimit);
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  box.innerHTML =
+      '<div class="row"><span>Daily cash limit</span><span>' + money(b.remainingToday) + ' left</span></div>'
+    + '<div class="bar"><i class="' + (pct >= 80 ? 'high' : '') + '"></i></div>'
+    + '<div class="row" style="margin-top:6px"><span>' + money(b.withdrawnToday) + ' withdrawn today</span>'
+    + '<span>of ' + money(b.dailyLimit) + '</span></div>';
+  requestAnimationFrame(() => requestAnimationFrame(() => { box.querySelector('.bar i').style.width = pct + '%'; }));
+}
+
+const TYPE_META = {
+  DEPOSIT:       { icon: '⬇️', dir: 'in',  word: 'Deposit' },
+  WITHDRAWAL:    { icon: '🏧', dir: 'out', word: 'Withdrawal' },
+  TRANSFER_IN:   { icon: '⬇️', dir: 'in',  word: 'Transfer in' },
+  TRANSFER_OUT:  { icon: '⬆️', dir: 'out', word: 'Transfer out' }
+};
+
+function renderRecent(rows) {
+  const box = $('recentList');
+  if (!rows || !rows.length) {
+    box.innerHTML = '<div class="empty" style="padding:16px 8px">No movements yet — your history will show up here.</div>';
+    return;
+  }
+  box.innerHTML = rows.map((t, i) => {
+    const m = TYPE_META[t.type] || { icon: '•', dir: 'out', word: t.type };
+    const sign = m.dir === 'in' ? '+' : '−';
+    const who = t.counterpartyAccountNumber ? ' · ' + t.counterpartyAccountNumber : '';
+    return '<div class="row-item" style="--d:' + (i * 70) + 'ms">'
+         + '<div class="ic">' + m.icon + '</div>'
+         + '<div class="info"><div class="nm">' + m.word + '</div>'
+         + '<div class="sub">' + new Date(t.createdAt).toLocaleDateString() + who + '</div></div>'
+         + '<div class="amt ' + m.dir + '">' + sign + numeric(t.amount) + '</div></div>';
+  }).join('');
+}
+
+function openAction(kind) {
+  show(kind);
+  if (kind === 'withdraw') {
+    // Reuse the balance we already fetched on the home screen — no extra request.
+    $('wdHint').textContent = session.remainingToday == null
+      ? 'No daily limit on this account.'
+      : money(session.remainingToday) + ' still available to withdraw today.';
+  }
+}
+
+/* ===========================================================================
+   MONEY MOVEMENT — each one shows a busy overlay, then a printed receipt
+=========================================================================== */
 $('depositForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); msg('');
+  e.preventDefault();
   const amount = $('depAmount').value.trim();
-  if (!validAmount(amount)) return msg('Enter an amount like 100 or 50.25', false);
+  if (!validAmount(amount)) return toast('Enter an amount like 100 or 50.25', 'err');
+  busy('Counting your cash…');
   try {
     const r = await api('/api/accounts/' + session.accountId + '/deposit', 'POST', { amount });
-    msg('Deposited ' + money(r.amount) + ' — new balance ' + money(r.balanceAfter), true);
     $('depAmount').value = '';
-    goHome();
-  } catch (err) { msg(err.message, false); }
+    success({
+      title: 'Deposit successful',
+      lines: [['Amount', money(r.amount)], ['Balance after', money(r.balanceAfter)]],
+      onContinue: goHome
+    });
+  } catch (err) { fail(err); }
 });
 
 $('withdrawForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); msg('');
+  e.preventDefault();
   const amount = $('wdAmount').value.trim();
-  if (!validAmount(amount)) return msg('Enter an amount like 100 or 50.25', false);
+  if (!validAmount(amount)) return toast('Enter an amount like 100 or 50.25', 'err');
+  busy('Dispensing your cash…');
   try {
     const r = await api('/api/accounts/' + session.accountId + '/withdraw', 'POST',
       { amount, pin: $('wdPin').value.trim() });
-    msg('Here is your cash: ' + money(r.amount) + ' — new balance ' + money(r.balanceAfter), true);
     $('wdAmount').value = ''; $('wdPin').value = '';
-    goHome();
-  } catch (err) { msg(err.message, false); }
+    success({
+      title: 'Take your cash',
+      cash: true,
+      lines: [['Amount', money(r.amount)], ['Balance after', money(r.balanceAfter)]],
+      onContinue: goHome
+    });
+  } catch (err) { fail(err); }
 });
 
 $('transferForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); msg('');
+  e.preventDefault();
   const amount = $('trAmount').value.trim();
-  if (!validAmount(amount)) return msg('Enter an amount like 100 or 50.25', false);
+  if (!validAmount(amount)) return toast('Enter an amount like 100 or 50.25', 'err');
+  busy('Moving your money…');
   try {
     const rows = await api('/api/transfers', 'POST', {
       toAccountNumber: $('trTo').value.trim(),
@@ -313,39 +1430,365 @@ $('transferForm').addEventListener('submit', async (e) => {
       pin: $('trPin').value.trim()
     });
     const out = rows.find(r => r.type === 'TRANSFER_OUT');
-    msg('Sent ' + money(out.amount) + ' to account ' + out.counterpartyAccountNumber
-        + ' — new balance ' + money(out.balanceAfter), true);
     $('trTo').value = ''; $('trAmount').value = ''; $('trPin').value = '';
-    goHome();
-  } catch (err) { msg(err.message, false); }
+    $('trConfirm').className = 'confirm';
+    $('trChips').querySelectorAll('button').forEach(b => b.classList.remove('on'));
+    success({
+      title: 'Transfer sent',
+      lines: [
+        ['To', out.counterpartyAccountNumber],
+        ['Amount', money(out.amount)],
+        ['Balance after', money(out.balanceAfter)]
+      ],
+      onContinue: goHome
+    });
+  } catch (err) { fail(err); }
 });
 
-function validAmount(s) { return /^\d+(\.\d{1,2})?$/.test(s) && Number(s) > 0; }
+function shake(el) { el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
 
-/* ----------------------------- STATEMENT --------------------------------- */
-async function openStatement() {
-  msg(''); show('statement');
-  const body = $('txBody');
-  body.innerHTML = '<tr><td colspan="3">Loading…</td></tr>';
+/* ===========================================================================
+   Payee confirmation: typing a 4+ digit account number asks the API whether it
+   exists and shows the holder's name, so nobody sends rent to a typo'd number.
+=========================================================================== */
+let lookupTimer = null;
+$('trTo').addEventListener('input', () => {
+  clearTimeout(lookupTimer);
+  lookupTimer = setTimeout(() => confirmAccount('trConfirm', $('trTo').value.trim()), 400);
+});
+$('payeeNumber').addEventListener('input', () => {
+  clearTimeout(lookupTimer);
+  lookupTimer = setTimeout(() => confirmAccount('payeeConfirm', $('payeeNumber').value.trim()), 400);
+});
+
+async function confirmAccount(elementId, accountNumber) {
+  const box = $(elementId);
+  if (!/^\d{4,20}$/.test(accountNumber)) { box.className = 'confirm'; return; }
   try {
-    const rows = await api('/api/accounts/' + session.accountId + '/transactions');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="3">No transactions yet.</td></tr>'; return; }
-    body.innerHTML = rows.map(t => {
-      const incoming = t.type === 'DEPOSIT' || t.type === 'TRANSFER_IN';
-      const label = t.type.replace('_', ' ');
-      const when = new Date(t.createdAt).toLocaleString();
-      return '<tr>'
-        + '<td><span class="badge ' + (incoming ? 'in' : 'out') + '">' + label + '</span>'
-        + '<div style="color:var(--muted);font-size:11px;margin-top:4px">' + when + '</div></td>'
-        + '<td class="num">' + (incoming ? '+' : '−') + Number(t.amount).toFixed(2) + '</td>'
-        + '<td class="num">' + Number(t.balanceAfter).toFixed(2) + '</td>'
-        + '</tr>';
-    }).join('');
-  } catch (err) { body.innerHTML = '<tr><td colspan="3">Failed to load.</td></tr>'; msg(err.message, false); }
+    const r = await api('/api/accounts/lookup?accountNumber=' + encodeURIComponent(accountNumber));
+    if (r.exists) {
+      box.innerHTML = '<span class="tick">✓</span> Sending to <b>' + escapeHtml(r.ownerName)
+                    + '</b> · ' + r.accountNumber;
+      box.className = 'confirm show';
+    } else {
+      box.innerHTML = '<span class="tick">✗</span> No account numbered ' + r.accountNumber;
+      box.className = 'confirm show bad';
+    }
+  } catch (err) { box.className = 'confirm'; }
 }
 
+/* ===========================================================================
+   PAYEES (saved)
+=========================================================================== */
+async function openPayees() {
+  show('payees');
+  await Promise.all([loadPayees(), loadPayeeChips()]);
+  confirmAccount('payeeConfirm', $('payeeNumber').value.trim());
+}
+
+async function loadPayees() {
+  const box = $('payeeList');
+  box.innerHTML = '<div class="skel"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:85%"></div>';
+  try {
+    const rows = await api('/api/accounts/' + session.accountId + '/beneficiaries');
+    if (!rows.length) {
+      box.innerHTML = '<div class="empty"><span class="big">👥</span>No payees saved yet.</div>';
+      return;
+    }
+    box.innerHTML = rows.map((b, i) =>
+      '<div class="row-item" style="--d:' + (i * 70) + 'ms" data-id="' + b.id + '">'
+      + '<div class="avatar">' + initials(b.ownerName) + '</div>'
+      + '<div class="info"><div class="nm">' + escapeHtml(b.nickname) + '</div>'
+      + '<div class="sub">' + b.accountNumber + ' · ' + escapeHtml(b.ownerName) + '</div></div>'
+      + '<div class="row-flex">'
+      + '<button class="icon-btn" data-act="send" data-acc="' + b.accountNumber + '">Send</button>'
+      + '<button class="icon-btn danger" data-act="del">✕</button>'
+      + '</div></div>').join('');
+  } catch (err) {
+    box.innerHTML = '<div class="empty">' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+$('payeeList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const row = btn.closest('.row-item');
+  if (btn.dataset.act === 'send') return sendTo(btn.dataset.acc);
+
+  row.classList.add('removing');                     // collapse animation before the reload
+  try {
+    await api('/api/accounts/' + session.accountId + '/beneficiaries/' + row.dataset.id, 'DELETE');
+    toast('Payee removed.', 'ok', 2400);
+    await Promise.all([loadPayees(), loadPayeeChips()]);
+  } catch (err) { row.classList.remove('removing'); toast(err.message, 'err'); }
+});
+
+/** Payee chips on the transfer screen — tap instead of typing the number. */
+async function loadPayeeChips() {
+  const box = $('trChips');
+  try {
+    const rows = await api('/api/accounts/' + session.accountId + '/beneficiaries');
+    box.innerHTML = rows.map(b =>
+      '<button type="button" data-acc="' + b.accountNumber + '">' + escapeHtml(b.nickname) + '</button>').join('');
+  } catch (err) { box.innerHTML = ''; }
+}
+
+$('trChips').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-acc]');
+  if (b) sendTo(b.dataset.acc);
+});
+
+function sendTo(accountNumber) {
+  $('trTo').value = accountNumber;
+  confirmAccount('trConfirm', accountNumber);
+  show('transfer');
+  setTimeout(() => { $('trAmount').classList.add('flash'); $('trAmount').focus(); }, 150);
+}
+
+$('payeeForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  busy('Saving payee…');
+  try {
+    await api('/api/accounts/' + session.accountId + '/beneficiaries', 'POST', {
+      accountNumber: $('payeeNumber').value.trim(),
+      nickname: $('payeeNick').value.trim()
+    });
+    closeOverlay();
+    $('payeeNumber').value = ''; $('payeeNick').value = '';
+    $('payeeConfirm').className = 'confirm';
+    toast('Payee saved.', 'ok');
+    await Promise.all([loadPayees(), loadPayeeChips()]);
+  } catch (err) { fail(err); }
+});
+
+/* ===========================================================================
+   STATEMENT: filters, paging, receipt popups, CSV export
+=========================================================================== */
+function openStatement() { resetFilters(); show('statement'); loadStatement(); }
+
+function resetFilters() {
+  stmt.page = 0;
+  $('fType').value = ''; $('fSearch').value = '';
+  $('fFrom').value = ''; $('fTo').value = '';
+  $('fMin').value = ''; $('fMax').value = '';
+  document.querySelectorAll('#typeChips button').forEach(b => b.classList.toggle('on', b.dataset.type === ''));
+}
+
+/** Type chips drive the same select, so the two can never disagree. */
+$('typeChips').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  document.querySelectorAll('#typeChips button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  $('fType').value = b.dataset.type;
+  stmt.page = 0;
+  loadStatement();
+});
+
+/** Any filter change jumps back to page 0 — page 7 of a new filter set is meaningless. */
+let filterTimer = null;
+['fType', 'fSearch', 'fFrom', 'fTo', 'fMin', 'fMax'].forEach(id => {
+  $(id).addEventListener('input', () => { stmt.page = 0; debounceLoad(); });
+  $(id).addEventListener('change', () => { stmt.page = 0; debounceLoad(); });
+});
+function debounceLoad() { clearTimeout(filterTimer); filterTimer = setTimeout(loadStatement, 300); }
+
+function turn(delta) {
+  if (delta < 0 && stmt.page === 0) return;
+  if (delta > 0 && stmt.last) return;
+  stmt.page += delta;
+  loadStatement();
+}
+
+function buildStatementQuery(size) {
+  const p = new URLSearchParams({ page: stmt.page, size: size || stmt.size });
+  if ($('fType').value)   p.set('type', $('fType').value);
+  if ($('fSearch').value) p.set('search', $('fSearch').value.trim());
+  if ($('fFrom').value)   p.set('from', $('fFrom').value);
+  if ($('fTo').value)     p.set('to', $('fTo').value);
+  if ($('fMin').value)    p.set('minAmount', $('fMin').value);
+  if ($('fMax').value)    p.set('maxAmount', $('fMax').value);
+  return p.toString();
+}
+
+async function loadStatement() {
+  const body = $('txBody');
+  body.innerHTML = Array.from({ length: 4 }, (_, i) =>
+    '<tr><td colspan="3"><div class="skel" style="width:' + (95 - i * 12) + '%"></div></td></tr>').join('');
+
+  try {
+    const page = await api('/api/accounts/' + session.accountId + '/statement?' + buildStatementQuery());
+    stmt.last = page.last;
+    stmt.rows = page.content;
+
+    if (!page.content.length) {
+      body.innerHTML = '<tr><td colspan="3"><div class="empty"><span class="big">🔍</span>'
+                     + 'No transactions match these filters.</div></td></tr>';
+    } else {
+      body.innerHTML = page.content.map((t, i) => {
+        const m = TYPE_META[t.type] || { dir: 'out', word: t.type };
+        const who = t.counterpartyAccountNumber
+          ? '<div class="sub">' + (m.dir === 'in' ? 'from ' : 'to ') + t.counterpartyAccountNumber + '</div>' : '';
+        return '<tr data-row="' + i + '" style="--d:' + (i * 55) + 'ms">'
+             + '<td><span class="badge ' + m.dir + '">' + m.word + '</span>'
+             + '<div class="sub">' + new Date(t.createdAt).toLocaleString() + '</div>' + who + '</td>'
+             + '<td class="num amt ' + m.dir + '">' + (m.dir === 'in' ? '+' : '−') + numeric(t.amount) + '</td>'
+             + '<td class="num">' + numeric(t.balanceAfter) + '</td></tr>';
+      }).join('');
+    }
+
+    const from = page.totalElements === 0 ? 0 : page.page * page.size + 1;
+    const to = Math.min((page.page + 1) * page.size, page.totalElements);
+    $('pageInfo').textContent = 'Page ' + (page.page + 1) + ' of ' + Math.max(page.totalPages, 1);
+    $('rangeInfo').textContent = from + '–' + to + ' of ' + page.totalElements;
+    $('prevPage').disabled = page.first;
+    $('nextPage').disabled = page.last;
+  } catch (err) {
+    body.innerHTML = '<tr><td colspan="3"><div class="empty">' + escapeHtml(err.message) + '</div></td></tr>';
+    toast(err.message, 'err');
+  }
+}
+
+/** Tap a row → the full receipt for that movement. */
+$('txBody').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-row]');
+  if (!tr) return;
+  openReceipt(stmt.rows[Number(tr.dataset.row)]);
+});
+
+let receiptRow = null;
+function openReceipt(t) {
+  if (!t) return;
+  receiptRow = t;
+  const m = TYPE_META[t.type] || { dir: 'out', word: t.type };
+  $('rcBody').innerHTML =
+      '<div class="rhead">' + m.word.toUpperCase() + '</div>'
+    + rline('Date', new Date(t.createdAt).toLocaleString(), 0)
+    + rline('Account', session.accountNumber, 1)
+    + (t.counterpartyAccountNumber ? rline(m.dir === 'in' ? 'From' : 'To', t.counterpartyAccountNumber, 2) : '')
+    + rline('Amount', (m.dir === 'in' ? '+' : '−') + money(t.amount), 3)
+    + rline('Balance after', money(t.balanceAfter), 4)
+    + rline('Ref', 'TX' + String(t.id).padStart(8, '0'), 5)
+    + '<div class="rline total" style="--d:760ms"><span>STATUS</span><b>COMPLETED</b></div>';
+  const ov = $('receiptModal');
+  ov.hidden = false; ov.classList.remove('out');
+}
+$('rcClose').addEventListener('click', () => {
+  const ov = $('receiptModal');
+  ov.classList.add('out');
+  setTimeout(() => { ov.hidden = true; ov.classList.remove('out'); }, 220);
+});
+$('rcCopy').addEventListener('click', async () => {
+  if (!receiptRow) return;
+  const ref = 'TX' + String(receiptRow.id).padStart(8, '0');
+  try { await navigator.clipboard.writeText(ref); toast('Reference ' + ref + ' copied', 'ok', 2200); }
+  catch (e) { toast('Reference: ' + ref, 'ok', 3000); }
+});
+
+/** Download the whole filtered statement as a CSV file (max 20 pages of 100). */
+$('exportBtn').addEventListener('click', async () => {
+  busy('Preparing your statement…');
+  try {
+    const rows = [];
+    for (let page = 0; page < 20; page++) {
+      const q = new URLSearchParams(buildStatementQuery(100));
+      q.set('page', page);
+      const p = await api('/api/accounts/' + session.accountId + '/statement?' + q);
+      rows.push(...p.content);
+      if (p.last) break;
+    }
+    const csv = ['Date,Type,Amount,Balance After,Counterparty,Reference']
+      .concat(rows.map(t => [
+        new Date(t.createdAt).toISOString(),
+        t.type,
+        Number(t.amount).toFixed(2),
+        Number(t.balanceAfter).toFixed(2),
+        t.counterpartyAccountNumber || '',
+        'TX' + String(t.id).padStart(8, '0')
+      ].join(','))).join('\n');
+
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'statement-' + session.accountNumber + '.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    closeOverlay();
+    toast(rows.length + ' row(s) downloaded.', 'ok');
+  } catch (err) { fail(err); }
+});
+
+/* ===========================================================================
+   SETTINGS: change PIN + active sessions
+=========================================================================== */
+async function openSettings() { show('settings'); await loadSessions(); }
+
+$('pinForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const next = $('newPinIn').value.trim();
+  if (next !== $('newPin2').value.trim()) { toast('The two new PINs do not match', 'err'); return shake($('pinForm')); }
+  if (!/^\d{4,6}$/.test(next)) { toast('The new PIN must be 4-6 digits', 'err'); return shake($('pinForm')); }
+  busy('Updating your PIN…');
+  try {
+    const r = await api('/api/accounts/' + session.accountId + '/change-pin', 'POST', {
+      currentPin: $('curPin').value.trim(),
+      newPin: next
+    });
+    closeOverlay();
+    $('curPin').value = ''; $('newPinIn').value = ''; $('newPin2').value = '';
+    const extra = r.otherSessionsSignedOut
+      ? ' Signed out on ' + r.otherSessionsSignedOut + ' other device(s).' : '';
+    success({ title: 'PIN changed', lines: [['Other devices', String(r.otherSessionsSignedOut || 0) + ' signed out']],
+              onContinue: () => toast('PIN changed.' + extra, 'ok', 5000) });
+    await loadSessions();
+  } catch (err) { fail(err); }
+});
+
+async function loadSessions() {
+  const box = $('sessionList');
+  box.innerHTML = '<div class="skel"></div><div class="skel" style="width:75%"></div>';
+  try {
+    const rows = await api('/api/auth/sessions');
+    if (!rows.length) { box.innerHTML = '<div class="empty">No active sessions.</div>'; return; }
+    box.innerHTML = rows.map((s, i) =>
+      '<div class="row-item" style="--d:' + (i * 70) + 'ms">'
+      + '<div class="ic">' + (s.current ? '📱' : '💻') + '</div>'
+      + '<div class="info"><div class="nm">' + (s.current ? 'This device' : 'Another device') + '</div>'
+      + '<div class="sub">signed in ' + new Date(s.signedInAt).toLocaleString() + '</div></div>'
+      + (s.current ? '<span class="badge in">current</span>' : '')
+      + '</div>').join('');
+  } catch (err) {
+    box.innerHTML = '<div class="empty">' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+/* ===========================================================================
+   Clock + idle session countdown (mirrors the server's 30-minute TTL)
+=========================================================================== */
+const IDLE_LIMIT = 30 * 60;   // seconds — same as AuthService.SESSION_TTL
+let idleLeft = IDLE_LIMIT;
+
+/** Any interaction pushes the auto sign-out deadline back (and the server does the same
+ *  on the next API call), so the countdown and the real session stay in step. */
+function bumpActivity() { if (session) idleLeft = IDLE_LIMIT; }
+['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, bumpActivity, true));
+
+setInterval(() => {
+  $('clock').textContent = new Date().toLocaleTimeString();
+  if (!session) return;
+  idleLeft--;
+  const m = String(Math.floor(idleLeft / 60)).padStart(2, '0');
+  const s = String(idleLeft % 60).padStart(2, '0');
+  $('sessClock').textContent = m + ':' + s;
+  $('sessChip').classList.add('on');
+  $('sessChip').classList.toggle('warn', idleLeft <= 60);
+  if (idleLeft === 60) toast('Session expires in 1 minute — tap to stay signed in.', 'warn', 5000);
+  if (idleLeft <= 0) signOutUI('Signed out after 30 minutes of inactivity.');
+}, 1000);
+
 /* ------------------------------ STARTUP ---------------------------------- */
-if (session) { goHome(); }          // still signed in after a refresh
+$('clock').textContent = new Date().toLocaleTimeString();
+if (session) { balanceShown = Number(session.balance || 0); goHome(); }   // still signed in after a refresh
 </script>
 </body>
 </html>

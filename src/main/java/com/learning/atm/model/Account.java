@@ -47,6 +47,15 @@ public class Account {
 	@Column(nullable = false, precision = 12, scale = 2)
 	private BigDecimal balance;
 
+	/**
+	 * Most that can be withdrawn in one calendar day. Nullable on purpose: rows created
+	 * before this column existed stay {@code null}, and {@code null} is treated as
+	 * "no limit" everywhere ({@code effectiveDailyLimit()}). A NOT NULL column would have
+	 * forced a backfill migration on the existing demo data.
+	 */
+	@Column(name = "daily_withdrawal_limit", precision = 12, scale = 2)
+	private BigDecimal dailyWithdrawalLimit;
+
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private LocalDateTime createdAt;
 
@@ -55,10 +64,16 @@ public class Account {
 	}
 
 	public Account(String accountNumber, String pin, String ownerName, BigDecimal balance) {
+		this(accountNumber, pin, ownerName, balance, null);
+	}
+
+	public Account(String accountNumber, String pin, String ownerName, BigDecimal balance,
+			BigDecimal dailyWithdrawalLimit) {
 		this.accountNumber = accountNumber;
 		this.pin = pin;
 		this.ownerName = ownerName;
 		this.balance = balance;
+		this.dailyWithdrawalLimit = dailyWithdrawalLimit;
 	}
 
 	@PrePersist
@@ -70,6 +85,17 @@ public class Account {
 			balance = BigDecimal.ZERO;
 		}
 		this.balance = this.balance.setScale(2, RoundingMode.HALF_UP);
+	}
+
+	/**
+	 * The limit to enforce, normalized to 2 decimals.
+	 *
+	 * <p>{@code null} means <b>no limit</b>. Returning a huge sentinel number instead would be
+	 * a trap: {@code BigDecimal} has no {@code MAX_VALUE}, and any stand-in would eventually
+	 * be printed to a customer or stored in the ledger.
+	 */
+	public BigDecimal effectiveDailyLimit() {
+		return dailyWithdrawalLimit;
 	}
 
 	// -------------------------------------------------------------------------
@@ -115,6 +141,14 @@ public class Account {
 
 	public void setBalance(BigDecimal balance) {
 		this.balance = balance;
+	}
+
+	public BigDecimal getDailyWithdrawalLimit() {
+		return dailyWithdrawalLimit;
+	}
+
+	public void setDailyWithdrawalLimit(BigDecimal dailyWithdrawalLimit) {
+		this.dailyWithdrawalLimit = dailyWithdrawalLimit;
 	}
 
 	public LocalDateTime getCreatedAt() {

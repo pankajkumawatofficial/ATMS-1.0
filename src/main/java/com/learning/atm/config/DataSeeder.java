@@ -28,9 +28,14 @@ public class DataSeeder implements CommandLineRunner {
 		if (accountRepository.count() > 0) {
 			return;
 		}
-		accountRepository.save(new Account("1001", "1234", "Alice Sharma", new BigDecimal("5000.00")));
-		accountRepository.save(new Account("1002", "5678", "Bob Verma", new BigDecimal("2500.00")));
-		accountRepository.save(new Account("1003", "4321", "Carol Singh", new BigDecimal("1000.00")));
-		log.info("Seeded 3 demo accounts -> 1001/1234, 1002/5678, 1003/4321");
+		BigDecimal dailyLimit = new BigDecimal("10000.00");
+		accountRepository.save(new Account("1001", "1234", "Alice Sharma",
+				new BigDecimal("5000.00"), dailyLimit));
+		accountRepository.save(new Account("1002", "5678", "Bob Verma",
+				new BigDecimal("2500.00"), dailyLimit));
+		accountRepository.save(new Account("1003", "4321", "Carol Singh",
+				new BigDecimal("1000.00"), dailyLimit));
+		log.info("Seeded 3 demo accounts -> 1001/1234, 1002/5678, 1003/4321 "
+				+ "(daily withdrawal limit {})", dailyLimit);
 	}
 }

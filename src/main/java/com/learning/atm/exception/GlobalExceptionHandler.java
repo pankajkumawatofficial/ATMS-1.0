@@ -32,6 +32,11 @@ public class GlobalExceptionHandler {
 		return build(404, "Not Found", ex.getMessage());
 	}
 
+	@ExceptionHandler(BeneficiaryNotFoundException.class)
+	public ResponseEntity<ApiError> handleBeneficiaryNotFound(BeneficiaryNotFoundException ex) {
+		return build(404, "Not Found", ex.getMessage());
+	}
+
 	@ExceptionHandler({InvalidCredentialsException.class, InvalidPinException.class})
 	public ResponseEntity<ApiError> handleUnauthorized(RuntimeException ex) {
 		return build(401, "Unauthorized", ex.getMessage());
@@ -42,13 +47,18 @@ public class GlobalExceptionHandler {
 		return build(403, "Forbidden", ex.getMessage());
 	}
 
+	@ExceptionHandler(DailyLimitExceededException.class)
+	public ResponseEntity<ApiError> handleDailyLimit(DailyLimitExceededException ex) {
+		return build(400, "Bad Request", ex.getMessage());
+	}
+
 	@ExceptionHandler({InsufficientFundsException.class, IllegalArgumentException.class})
 	public ResponseEntity<ApiError> handleBadRequest(RuntimeException ex) {
 		return build(400, "Bad Request", ex.getMessage());
 	}
 
-	@ExceptionHandler(DuplicateAccountNumberException.class)
-	public ResponseEntity<ApiError> handleConflict(DuplicateAccountNumberException ex) {
+	@ExceptionHandler({DuplicateAccountNumberException.class, DuplicateBeneficiaryException.class})
+	public ResponseEntity<ApiError> handleConflict(RuntimeException ex) {
 		return build(409, "Conflict", ex.getMessage());
 	}
 

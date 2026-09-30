@@ -24,6 +24,9 @@ public class WebConfig implements WebMvcConfigurer {
 	public void addInterceptors(InterceptorRegistry registry) {
 		registry.addInterceptor(authInterceptor)
 				.addPathPatterns("/api/**")
+				// The only two paths reachable without a token: logging in, and opening an
+				// account. Every sub-path of /api/accounts (/{id}/balance, /{id}/statement, …)
+				// still goes through the interceptor.
 				.excludePathPatterns("/api/auth/login", "/api/accounts");
 	}
 }

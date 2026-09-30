@@ -2,6 +2,7 @@ package com.learning.atm.service;
 
 import com.learning.atm.dto.TransactionResponse;
 import com.learning.atm.exception.AccountNotFoundException;
+import com.learning.atm.exception.DailyLimitExceededException;
 import com.learning.atm.exception.InsufficientFundsException;
 import com.learning.atm.exception.InvalidPinException;
 import com.learning.atm.model.Account;
@@ -10,6 +11,8 @@ import com.learning.atm.model.TransactionType;
 import com.learning.atm.repository.AccountRepository;
 import com.learning.atm.repository.TransactionRepository;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,8 +57,51 @@ public class AtmService {
 		if (account.getBalance().compareTo(amount) < 0) {
 			throw new InsufficientFundsException(account.getBalance(), amount);
 		}
+		enforceDailyLimit(account, amount);
 		account.setBalance(account.getBalance().subtract(amount));
 		return record(account, TransactionType.WITHDRAWAL, amount, null);
+	}
+
+	/**
+	 * Cash already taken out today. Public because the balance endpoint reports it so the UI
+	 * can show "₹3,000 of ₹10,000 used today" without a second request.
+	 *
+	 * @param accountId the account to total; does not check ownership — callers must
+	 *                  authorize the account id themselves
+	 */
+	@Transactional(readOnly = true)
+	public BigDecimal withdrawnToday(long accountId) {
+		return Transaction.money(transactionRepository.sumAmountSince(
+				accountId, TransactionType.WITHDRAWAL, startOfToday()));
+	}
+
+	/**
+	 * Blocks a withdrawal that would exceed the account's daily cash limit.
+	 *
+	 * <p>Learning notes:
+	 * <ul>
+	 *   <li>The day boundary is <b>midnight tonight</b>, so the allowance resets on the
+	 *       calendar rather than 24 hours after the last withdrawal.</li>
+	 *   <li>It runs <b>after</b> the funds check on purpose. A customer with a ₹500 balance and
+	 *       a ₹10,000 daily limit who asks for ₹900 should be told "insufficient funds", not
+	 *       "limit reached" — the more specific, more actionable message comes first.</li>
+	 *   <li>The account is already locked by the caller, so the sum-then-check cannot race with
+	 *       another withdrawal in another thread.</li>
+	 * </ul>
+	 */
+	private void enforceDailyLimit(Account account, BigDecimal amount) {
+		BigDecimal limit = account.effectiveDailyLimit();
+		if (limit == null) {
+			return; // no limit configured on this account
+		}
+		BigDecimal withdrawnToday = withdrawnToday(account.getId());
+		if (withdrawnToday.add(amount).compareTo(limit) > 0) {
+			throw new DailyLimitExceededException(limit, withdrawnToday, amount);
+		}
+	}
+
+	private static LocalDateTime startOfToday() {
+		return LocalDate.now().atStartOfDay();
 	}
 
 	/**

@@ -3,10 +3,12 @@ package com.learning.atm.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 import com.learning.atm.dto.TransactionResponse;
+import com.learning.atm.exception.DailyLimitExceededException;
 import com.learning.atm.exception.InsufficientFundsException;
 import com.learning.atm.exception.InvalidPinException;
 import com.learning.atm.model.Account;
@@ -71,6 +73,8 @@ class AtmServiceTest {
 	@Test
 	void withdrawDeductsMoneyWhenFundsAndPinAreValid() {
 		when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(account));
+		when(transactionRepository.sumAmountSince(eq(1L), eq(TransactionType.WITHDRAWAL), any()))
+				.thenReturn(BigDecimal.ZERO);
 
 		TransactionResponse response = atmService.withdraw(1L, new BigDecimal("40.00"), "1234");
 
@@ -118,5 +122,67 @@ class AtmServiceTest {
 		assertThat(result.get(0).type()).isEqualTo(TransactionType.TRANSFER_OUT);
 		assertThat(result.get(0).counterpartyAccountNumber()).isEqualTo("1002");
 		assertThat(result.get(1).type()).isEqualTo(TransactionType.TRANSFER_IN);
+	}
+
+	// -------------------------------------------------------------------------
+	// Daily withdrawal limit
+	// -------------------------------------------------------------------------
+
+	@Test
+	void withdrawIsRejectedWhenItWouldExceedTheDailyLimit() {
+		Account limited = new Account("1001", "1234", "Alice", new BigDecimal("900.00"),
+				new BigDecimal("1000.00"));
+		limited.setId(1L);
+
+		when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(limited));
+		// ₹800 already taken out today, so only ₹200 of the ₹1,000 allowance is left.
+		when(transactionRepository.sumAmountSince(eq(1L), eq(TransactionType.WITHDRAWAL), any()))
+				.thenReturn(new BigDecimal("800.00"));
+
+		assertThatThrownBy(() -> atmService.withdraw(1L, new BigDecimal("300.00"), "1234"))
+				.isInstanceOf(DailyLimitExceededException.class)
+				.hasMessageContaining("1000.00");
+
+		assertThat(limited.getBalance()).isEqualByComparingTo("900.00"); // untouched
+	}
+
+	@Test
+	void withdrawExactlyUpToTheDailyLimitIsAllowed() {
+		Account limited = new Account("1001", "1234", "Alice", new BigDecimal("900.00"),
+				new BigDecimal("1000.00"));
+		limited.setId(1L);
+
+		when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(limited));
+		when(transactionRepository.sumAmountSince(eq(1L), eq(TransactionType.WITHDRAWAL), any()))
+				.thenReturn(new BigDecimal("800.00"));
+
+		atmService.withdraw(1L, new BigDecimal("200.00"), "1234");
+
+		// Boundary: the limit is inclusive, so spending the last rupee must go through.
+		assertThat(limited.getBalance()).isEqualByComparingTo("700.00");
+	}
+
+	@Test
+	void accountWithNoLimitCanWithdrawRegardlessOfDailyTotal() {
+		when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(account));
+		// A large existing total, which only matters when a limit is configured.
+		when(transactionRepository.sumAmountSince(eq(1L), eq(TransactionType.WITHDRAWAL), any()))
+				.thenReturn(new BigDecimal("99999.00"));
+
+		atmService.withdraw(1L, new BigDecimal("40.00"), "1234");
+
+		assertThat(account.getBalance()).isEqualByComparingTo("60.00");
+	}
+
+	@Test
+	void insufficientFundsIsReportedBeforeTheDailyLimit() {
+		Account limited = new Account("1001", "1234", "Alice", new BigDecimal("100.00"),
+				new BigDecimal("1000.00"));
+		limited.setId(1L);
+
+		when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(limited));
+		// Both problems apply here; the balance one is the actionable message, so it wins.
+		assertThatThrownBy(() -> atmService.withdraw(1L, new BigDecimal("500.00"), "1234"))
+				.isInstanceOf(InsufficientFundsException.class);
 	}
 }
